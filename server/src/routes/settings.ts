@@ -62,6 +62,8 @@ router.get('/', async (_req, res: Response): Promise<void> => {
                     posPinLength: 4,
                     emailDomain: 'shadow.com',
                     maintenanceMode: false,
+                    receiptFooter: 'Thank you for shopping with us!',
+                    receiptPolicy: 'No return, no exchange after 7 days.',
                 },
             });
         }
@@ -77,6 +79,8 @@ router.get('/', async (_req, res: Response): Promise<void> => {
             hasPosPin: !!settings.posPin,
             emailDomain: settings.emailDomain,
             maintenanceMode: settings.maintenanceMode,
+            receiptFooter: settings.receiptFooter,
+            receiptPolicy: settings.receiptPolicy,
         };
 
         res.json(safeSettings);
@@ -86,10 +90,10 @@ router.get('/', async (_req, res: Response): Promise<void> => {
     }
 });
 
-// PUT update settings (Protected - ADMIN and STAFF only)
-router.put('/', authenticate, authorize('ADMIN', 'STAFF'), upload.single('logo'), async (req: AuthRequest, res: Response): Promise<void> => {
+// PUT update settings (Protected - ADMIN only)
+router.put('/', authenticate, authorize('ADMIN'), upload.single('logo'), async (req: AuthRequest, res: Response): Promise<void> => {
     try {
-        const { appName, subtitle, logoIcon, removeLogo, posPin, posPinLength, emailDomain, maintenanceMode } = req.body;
+        const { appName, subtitle, logoIcon, removeLogo, posPin, posPinLength, emailDomain, maintenanceMode, receiptFooter, receiptPolicy } = req.body;
 
         if (!appName || !subtitle || !logoIcon) {
             res.status(400).json({ error: 'appName, subtitle, and logoIcon are required.' });
@@ -120,6 +124,8 @@ router.put('/', authenticate, authorize('ADMIN', 'STAFF'), upload.single('logo')
                 ...(posPinLength !== undefined ? { posPinLength: Number(posPinLength) } : {}),
                 ...(emailDomain !== undefined ? { emailDomain } : {}),
                 ...(isMaintenance !== undefined ? { maintenanceMode: isMaintenance } : {}),
+                ...(receiptFooter !== undefined ? { receiptFooter } : {}),
+                ...(receiptPolicy !== undefined ? { receiptPolicy } : {}),
             },
             create: {
                 id: 1,
@@ -131,6 +137,8 @@ router.put('/', authenticate, authorize('ADMIN', 'STAFF'), upload.single('logo')
                 posPinLength: posPinLength ? Number(posPinLength) : 4,
                 emailDomain: emailDomain || 'shadow.com',
                 maintenanceMode: isMaintenance || false,
+                receiptFooter: receiptFooter || 'Thank you for shopping with us!',
+                receiptPolicy: receiptPolicy || 'No return, no exchange after 7 days.',
             },
         });
 
@@ -145,6 +153,8 @@ router.put('/', authenticate, authorize('ADMIN', 'STAFF'), upload.single('logo')
             hasPosPin: !!settings.posPin,
             emailDomain: settings.emailDomain,
             maintenanceMode: settings.maintenanceMode,
+            receiptFooter: settings.receiptFooter,
+            receiptPolicy: settings.receiptPolicy,
         });
     } catch (error: any) {
         console.error('Failed to update settings:', error);
@@ -183,6 +193,38 @@ router.post('/verify-pin', authenticate, async (req: AuthRequest, res: Response)
     } catch (error) {
         console.error('Verify pin error:', error);
         res.status(500).json({ error: 'Failed to verify admin credentials.' });
+    }
+});
+
+// POST clear all data (Protected - ADMIN only)
+router.post('/clear-data', authenticate, authorize('ADMIN'), async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+        // Clear all transactional and product data
+        await prisma.auditLog.deleteMany({});
+        await prisma.inventoryAuditItem.deleteMany({});
+        await prisma.inventoryAudit.deleteMany({});
+        await prisma.transactionItem.deleteMany({});
+        await prisma.transaction.deleteMany({});
+        await prisma.stockItem.deleteMany({});
+        await prisma.bundleItem.deleteMany({});
+        await prisma.product.deleteMany({});
+        await prisma.category.deleteMany({});
+        await prisma.supplier.deleteMany({});
+        
+        // Log the action
+        await prisma.auditLog.create({
+            data: {
+                userId: req.user!.id,
+                action: 'CLEAR_DATA',
+                entity: 'System',
+                details: 'Admin cleared all products, categories, and transactions.'
+            }
+        });
+
+        res.json({ success: true, message: 'All data has been cleared successfully.' });
+    } catch (error: any) {
+        console.error('Failed to clear data:', error);
+        res.status(500).json({ error: error.message || 'Failed to clear data' });
     }
 });
 

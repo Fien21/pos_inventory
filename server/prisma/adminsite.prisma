@@ -1,0 +1,64 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../../adminsite_system/src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = "postgresql://pos_user:Pos_Admin2026@localhost:5432/adminsite_db"
+}
+
+model Client {
+  id             String    @id
+  name           String
+  organization   String    @default("")
+  company        String    @default("")
+  branch         String    @default("Main Branch")
+  contactNumber  String    @default("")
+  maxDevices     Int       @default(1)
+  status         String    @default("active")
+  systemType     String    @default("POS")
+  lat            Float     @default(14.5995)
+  lng            Float     @default(120.9842)
+  key            String?
+  hashedKey      String?
+  expires        DateTime?
+  amountPaid     Float     @default(0)
+  devices        Json      @default("[]")
+  metrics        Json?
+  createdAt      DateTime  @default(now())
+
+  billingRecords Billing[]
+}
+
+model Billing {
+  id          String   @id
+  clientId    String
+  clientName  String
+  licenseKey  String
+  type        String
+  details     String
+  amount      Float
+  date        DateTime
+  status      String   @default("PAID")
+  client      Client   @relation(fields: [clientId], references: [id])
+}
+
+model Ticket {
+  id          String   @id
+  licenseKey  String
+  subject     String
+  message     String
+  senderName  String
+  senderRole  String
+  status      String   @default("OPEN")
+  reply       String?
+  createdAt   DateTime @default(now())
+}
+
+model Broadcast {
+  id      Int     @id @default(autoincrement())
+  active  Boolean @default(false)
+  message String  @default("")
+  type    String  @default("info")
+}

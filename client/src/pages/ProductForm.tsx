@@ -36,11 +36,26 @@ export default function ProductForm() {
     const [isSearching, setIsSearching] = useState(false);
     const [serialNumbers, setSerialNumbers] = useState('');
     const [autoGenerateSn, setAutoGenerateSn] = useState(true);
+    const [isBundle, setIsBundle] = useState(false);
+    const [bundleItems, setBundleItems] = useState<{productId: string; quantity: string; product: any; productName?: string}[]>([]);
+    const [allProducts, setAllProducts] = useState<any[]>([]);
 
     const snCount = serialNumbers.split('\n').map(l => l.trim()).filter(Boolean).length;
 
     useEffect(() => {
-        axios.get('/api/categories').then((r) => setCategories(r.data));
+        axios.get('/api/categories')
+            .then((r) => setCategories(r.data))
+            .catch((err) => console.error("Failed to fetch categories:", err));
+
+        axios.get('/api/products')
+            .then((r) => {
+                if (id) {
+                    setAllProducts(r.data.filter((p: any) => p.id !== Number(id)));
+                } else {
+                    setAllProducts(r.data);
+                }
+            })
+            .catch((err) => console.error("Failed to fetch products:", err));
 
         if (isEdit) {
             axios.get(`/api/products/${id}`).then((r) => {
@@ -55,6 +70,15 @@ export default function ProductForm() {
                 setStockQty(String(p.stockQty));
                 setCategoryId(String(p.categoryId));
                 setBarcode(p.barcode);
+                setIsBundle(Boolean(p.isBundle));
+                if (p.bundleItems && p.bundleItems.length > 0) {
+                    setBundleItems(p.bundleItems.map((bi: any) => ({
+                        productId: String(bi.productId),
+                        quantity: String(bi.quantity),
+                        product: bi.product,
+                        productName: bi.product ? `${bi.product.name} (${bi.product.barcode || 'No barcode'})` : ''
+                    })));
+                }
                 if (p.imageUrl) setImagePreview(p.imageUrl);
 
                 if (p.stockItems && p.stockItems.length > 0) {
@@ -96,7 +120,7 @@ export default function ProductForm() {
 
     const handleSelectSuggestion = async (p: any) => {
         setShowSuggestions(false);
-        if (p.product_name) setName(p.product_name);
+        if (p.product_name) setName(p.product_name.toUpperCase());
         if (p.code) setBarcode(p.code);
         
         const descParts = [];
@@ -120,16 +144,18 @@ export default function ProductForm() {
         }
     };
 
-    const handleLookup = async () => {
+    const handleLookup = async (isAuto = false) => {
         if (!barcode) {
-            Swal.fire({
-                icon: 'warning',
-                title: 'Barcode Required',
-                text: 'Please enter a barcode to look up.',
-                background: '#1a1a2e',
-                color: '#eee',
-                confirmButtonColor: '#6c63ff',
-            });
+            if (!isAuto) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Barcode Required',
+                    text: 'Please enter a barcode to look up.',
+                    background: '#1a1a2e',
+                    color: '#eee',
+                    confirmButtonColor: '#6c63ff',
+                });
+            }
             return;
         }
 
@@ -140,7 +166,7 @@ export default function ProductForm() {
 
             if (data.status === 1 && data.product) {
                 const p = data.product;
-                if (p.product_name) setName(p.product_name);
+                if (p.product_name) setName(p.product_name.toUpperCase());
                 
                 const descParts = [];
                 if (p.brands) descParts.push(`Brand: ${p.brands}`);
@@ -172,28 +198,41 @@ export default function ProductForm() {
                     color: '#eee',
                 });
             } else {
+                if (!isAuto) {
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Not Found',
+                        text: 'Product not found in Open Food Facts database.',
+                        background: '#1a1a2e',
+                        color: '#eee',
+                        confirmButtonColor: '#6c63ff',
+                    });
+                }
+            }
+        } catch (err) {
+            if (!isAuto) {
                 Swal.fire({
                     icon: 'error',
-                    title: 'Not Found',
-                    text: 'Product not found in Open Food Facts database.',
+                    title: 'Lookup Failed',
+                    text: 'Could not connect to the database or an error occurred.',
                     background: '#1a1a2e',
                     color: '#eee',
                     confirmButtonColor: '#6c63ff',
                 });
             }
-        } catch (err) {
-            Swal.fire({
-                icon: 'error',
-                title: 'Lookup Failed',
-                text: 'Could not connect to the database or an error occurred.',
-                background: '#1a1a2e',
-                color: '#eee',
-                confirmButtonColor: '#6c63ff',
-            });
         } finally {
             setLookupLoading(false);
         }
     };
+
+    // Auto-lookup barcode with debounce
+    useEffect(() => {
+        if (!barcode || barcode.length < 5 || isEdit) return;
+        const timer = setTimeout(() => {
+            handleLookup(true);
+        }, 800);
+        return () => clearTimeout(timer);
+    }, [barcode]);
 
     const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -221,6 +260,10 @@ export default function ProductForm() {
         formData.append('categoryId', categoryId);
         formData.append('serialNumbers', serialNumbers);
         formData.append('autoGenerateSn', String(autoGenerateSn));
+        formData.append('isBundle', String(isBundle));
+        if (isBundle && bundleItems.length > 0) {
+            formData.append('bundleItems', JSON.stringify(bundleItems));
+        }
         if (barcode) formData.append('barcode', barcode);
         if (image) {
             formData.append('image', image);
@@ -265,15 +308,16 @@ export default function ProductForm() {
     };
 
     return (
-        <div className="page">
-            <div className="page-header">
+        <div className="flex flex-col h-full bg-[#f8fafc]">
+            <header className="h-[60px] bg-white border-b border-slate-200 px-6 shrink-0 flex items-center justify-between">
                 <div>
                     <button className="btn btn-ghost" onClick={() => navigate('/inventory')}>
                         <ArrowLeft size={18} /> Back
                     </button>
-                    <h1>{isEdit ? 'Edit Product' : 'New Product'}</h1>
+                    <h1 className="text-[20px] font-bold text-slate-900 tracking-tight">{isEdit ? 'Edit Product' : 'New Product'}</h1>
                 </div>
-            </div>
+            </header>
+            <main className="flex-1 p-5 overflow-y-auto w-full">
 
             <motion.div
                 className="card form-card"
@@ -289,7 +333,7 @@ export default function ProductForm() {
                                     type="text"
                                     value={name}
                                     onChange={(e) => {
-                                        setName(e.target.value);
+                                        setName(e.target.value.toUpperCase());
                                         setShowSuggestions(true);
                                     }}
                                     onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
@@ -369,11 +413,14 @@ export default function ProductForm() {
                                             const c = parseFloat(val);
                                             const t = parseFloat(taxRate);
                                             if (!isNaN(c)) {
+                                                let r = c;
                                                 if (!isNaN(t) && t > 0) {
-                                                    setRetailPrice((c * (1 + t / 100)).toFixed(2));
-                                                } else {
-                                                    setRetailPrice(c.toFixed(2));
+                                                    r = c * (1 + t / 100);
                                                 }
+                                                if (taxInclusive) {
+                                                    r = r * 1.12;
+                                                }
+                                                setRetailPrice(r.toFixed(2));
                                             }
                                         }}
                                         required
@@ -381,7 +428,7 @@ export default function ProductForm() {
                                     />
                                 </div>
                                 <div className="form-group">
-                                    <label>VAT Rate (%)</label>
+                                    <label>Markup Margin (%)</label>
                                     <input
                                         type="number"
                                         step="0.01"
@@ -392,11 +439,14 @@ export default function ProductForm() {
                                             const c = parseFloat(costPrice);
                                             const t = parseFloat(val);
                                             if (!isNaN(c)) {
+                                                let r = c;
                                                 if (!isNaN(t) && t > 0) {
-                                                    setRetailPrice((c * (1 + t / 100)).toFixed(2));
-                                                } else {
-                                                    setRetailPrice(c.toFixed(2));
+                                                    r = c * (1 + t / 100);
                                                 }
+                                                if (taxInclusive) {
+                                                    r = r * 1.12;
+                                                }
+                                                setRetailPrice(r.toFixed(2));
                                             }
                                         }}
                                         placeholder="0.00"
@@ -414,13 +464,13 @@ export default function ProductForm() {
                                             const val = e.target.value;
                                             setRetailPrice(val);
                                             const r = parseFloat(val);
-                                            const t = parseFloat(taxRate);
-                                            if (!isNaN(r)) {
-                                                if (!isNaN(t) && t > 0) {
-                                                    setCostPrice((r / (1 + t / 100)).toFixed(2));
-                                                } else {
-                                                    setCostPrice(r.toFixed(2));
-                                                }
+                                            const c = parseFloat(costPrice);
+                                            if (!isNaN(r) && !isNaN(c) && c > 0) {
+                                                let base = taxInclusive ? r / 1.12 : r;
+                                                const margin = ((base / c) - 1) * 100;
+                                                setTaxRate(margin.toFixed(2));
+                                            } else if (!isNaN(r) && (isNaN(c) || c === 0)) {
+                                                // If no cost price, we can't calculate margin, just clear it or leave it
                                             }
                                         }}
                                         required
@@ -432,7 +482,22 @@ export default function ProductForm() {
                                         id="tax-inclusive"
                                         type="checkbox"
                                         checked={taxInclusive}
-                                        onChange={(e) => setTaxInclusive(e.target.checked)}
+                                        onChange={(e) => {
+                                            const checked = e.target.checked;
+                                            setTaxInclusive(checked);
+                                            const c = parseFloat(costPrice);
+                                            const t = parseFloat(taxRate);
+                                            if (!isNaN(c)) {
+                                                let r = c;
+                                                if (!isNaN(t) && t > 0) {
+                                                    r = c * (1 + t / 100);
+                                                }
+                                                if (checked) {
+                                                    r = r * 1.12;
+                                                }
+                                                setRetailPrice(r.toFixed(2));
+                                            }
+                                        }}
                                         style={{ width: '18px', height: '18px', cursor: 'pointer' }}
                                     />
                                     <label htmlFor="tax-inclusive" style={{ cursor: 'pointer', margin: 0, fontWeight: 500 }}>Tax Inclusive</label>
@@ -460,6 +525,127 @@ export default function ProductForm() {
                                     </select>
                                 </div>
                             </div>
+                            <div className="form-group" style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <input
+                                    id="is-bundle"
+                                    type="checkbox"
+                                    checked={isBundle}
+                                    onChange={(e) => setIsBundle(e.target.checked)}
+                                    style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                                />
+                                <label htmlFor="is-bundle" style={{ cursor: 'pointer', margin: 0, fontWeight: 500 }}>
+                                    This is a Bundle Product
+                                </label>
+                            </div>
+                            
+                            {isBundle && (
+                                <div className="form-group" style={{ marginTop: '16px', borderTop: '1px solid var(--border)', paddingTop: '16px', paddingBottom: '16px', borderBottom: '1px solid var(--border)' }}>
+                                    <label style={{ color: 'var(--accent)' }}>Bundle Contents *</label>
+                                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                                        Search and select the items that make up this bundle.
+                                    </p>
+                                    <datalist id="bundle-product-list">
+                                        {allProducts.filter(p => !p.isBundle).map(p => (
+                                            <option key={p.id} value={`${p.name} (${p.barcode || 'No barcode'})`} />
+                                        ))}
+                                    </datalist>
+                                    {bundleItems.map((bi, idx) => (
+                                        <div key={idx} style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                                            <input 
+                                                type="text"
+                                                list="bundle-product-list"
+                                                value={bi.productName || ''} 
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    const newBi = [...bundleItems];
+                                                    newBi[idx].productName = val;
+                                                    const selectedP = allProducts.find(p => `${p.name} (${p.barcode || 'No barcode'})` === val);
+                                                    if (selectedP) {
+                                                        newBi[idx].productId = String(selectedP.id);
+                                                        newBi[idx].product = selectedP;
+                                                    } else {
+                                                        newBi[idx].productId = '';
+                                                        newBi[idx].product = null;
+                                                    }
+                                                    setBundleItems(newBi);
+                                                }} 
+                                                style={{ flex: 1 }}
+                                                placeholder="Search product..."
+                                                required
+                                            />
+                                            <input 
+                                                type="number" 
+                                                value={bi.quantity} 
+                                                onChange={(e) => {
+                                                    const newBi = [...bundleItems];
+                                                    newBi[idx].quantity = e.target.value;
+                                                    setBundleItems(newBi);
+                                                }} 
+                                                style={{ width: '80px' }} 
+                                                placeholder="Qty" 
+                                                required 
+                                                min="1"
+                                            />
+                                            <button type="button" className="btn btn-icon" onClick={() => {
+                                                setBundleItems(bundleItems.filter((_, i) => i !== idx));
+                                            }} style={{ color: '#ff4b4b', padding: '0 8px' }} title="Remove">
+                                                ✖
+                                            </button>
+                                        </div>
+                                    ))}
+                                    <button type="button" className="btn btn-secondary" onClick={() => setBundleItems([...bundleItems, { productId: '', quantity: '1', product: null, productName: '' }])} style={{ marginTop: '8px', fontSize: '0.8rem', padding: '6px 12px' }}>
+                                        + Add Bundle Item
+                                    </button>
+                                    {bundleItems.length > 0 && (
+                                        <div style={{ marginTop: '16px', fontSize: '0.85rem', color: 'var(--text-primary)', background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '6px', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <span>
+                                                    Estimated Bundle Cost: <strong style={{ color: 'var(--green)' }}>₱{bundleItems.reduce((sum, bi) => {
+                                                        const c = bi.product?.costPrice || 0;
+                                                        return sum + (c * (parseInt(bi.quantity) || 1));
+                                                    }, 0).toFixed(2)}</strong>
+                                                </span>
+                                                <button 
+                                                    type="button" 
+                                                    className="btn btn-secondary" 
+                                                    style={{ padding: '4px 12px', fontSize: '0.75rem' }}
+                                                    onClick={() => {
+                                                        const sum = bundleItems.reduce((s, bi) => {
+                                                            const c = bi.product?.costPrice || 0;
+                                                            return s + (c * (parseInt(bi.quantity) || 1));
+                                                        }, 0);
+                                                        setCostPrice(sum.toFixed(2));
+                                                    }}
+                                                >
+                                                    Use as Cost Price
+                                                </button>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <span>
+                                                    Estimated Total Retail Price: <strong style={{ color: 'var(--accent)' }}>₱{bundleItems.reduce((sum, bi) => {
+                                                        const r = bi.product?.retailPrice || bi.product?.price || 0;
+                                                        return sum + (r * (parseInt(bi.quantity) || 1));
+                                                    }, 0).toFixed(2)}</strong>
+                                                </span>
+                                                <button 
+                                                    type="button" 
+                                                    className="btn btn-secondary" 
+                                                    style={{ padding: '4px 12px', fontSize: '0.75rem' }}
+                                                    onClick={() => {
+                                                        const sum = bundleItems.reduce((s, bi) => {
+                                                            const r = bi.product?.retailPrice || bi.product?.price || 0;
+                                                            return s + (r * (parseInt(bi.quantity) || 1));
+                                                        }, 0);
+                                                        setRetailPrice(sum.toFixed(2));
+                                                    }}
+                                                >
+                                                    Use as Retail Price
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                             <div className="form-group" style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <input
                                     id="auto-gen-sn"
@@ -498,6 +684,12 @@ export default function ProductForm() {
                                             type="text"
                                             value={barcode}
                                             onChange={(e) => setBarcode(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    e.preventDefault();
+                                                    handleLookup(false);
+                                                }
+                                            }}
                                             placeholder="Leave blank to auto-generate"
                                             disabled={isEdit}
                                             style={{ flex: 1 }}
@@ -515,7 +707,7 @@ export default function ProductForm() {
                                         <button
                                             type="button"
                                             className="btn btn-primary"
-                                            onClick={handleLookup}
+                                            onClick={() => handleLookup(false)}
                                             disabled={lookupLoading || !barcode}
                                             style={{ padding: '0 12px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '4px' }}
                                         >
@@ -589,6 +781,7 @@ export default function ProductForm() {
                     </div>
                 </form>
             </motion.div>
+        </main>
         </div>
     );
 }

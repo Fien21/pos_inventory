@@ -5,6 +5,7 @@ import App from './App';
 import { AuthProvider } from './context/AuthContext';
 import { BrandingProvider } from './context/BrandingContext';
 import './index.css';
+import './tailwind-base.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>

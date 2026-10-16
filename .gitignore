@@ -1,9 +1,34 @@
+﻿# Dependencies
 node_modules/
 client/node_modules/
 server/node_modules/
+
+# Python cache (if applicable)
 __pycache__/
+*.pyc
+
+# Environment & Secrets (Protects server/.env)
 .env
+.env*
+**/env
+**/env*
+
+# Virtual Environments
 .venv
 venv/
-*.pyc
+
+# Build & Prisma generated files
+dist/
+build/
+**/generated/
+
+# Local SQLite databases
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Logs & OS metadata
+*.log
 .DS_Store
+*.tsbuildinfo

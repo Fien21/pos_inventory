@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import Swal from 'sweetalert2';
-import { ClipboardList, History, ShieldAlert, Plus, CheckCircle } from 'lucide-react';
+import { ClipboardList, History, ShieldAlert, Plus, CheckCircle, Package } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export default function Audits() {
     const { token } = useAuth();
-    const [activeTab, setActiveTab] = useState<'system' | 'inventory'>('system');
+    const [activeTab, setActiveTab] = useState<'system' | 'purchases' | 'inventory'>('system');
     
     // System Logs
     const [systemLogs, setSystemLogs] = useState<any[]>([]);
@@ -23,6 +23,9 @@ export default function Audits() {
     useEffect(() => {
         if (activeTab === 'system') {
             fetchSystemLogs();
+        } else if (activeTab === 'purchases') {
+            fetchSystemLogs();
+            fetchProducts();
         } else {
             fetchInventoryAudits();
             fetchProducts(); // needed for creating new audits
@@ -176,6 +179,51 @@ export default function Audits() {
         </div>
     );
 
+    const renderStockPurchases = () => {
+        const purchaseLogs = systemLogs.filter(log => log.action === 'STOCK_PURCHASE');
+        return (
+            <div className="card">
+                <h2 className="card-header"><Package className="icon" /> Stock Purchase Logs</h2>
+                <div className="table-container">
+                    <table className="table w-full">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>User</th>
+                                <th>Product</th>
+                                <th>Quantity Added</th>
+                                <th>Supplier Info</th>
+                                <th>Reference No.</th>
+                                <th>Invoice No.</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {purchaseLogs.map(log => {
+                                let details: any = {};
+                                try { details = JSON.parse(log.details || '{}'); } catch(e){}
+                                const product = products.find(p => p.id === log.entityId);
+                                return (
+                                    <tr key={log.id}>
+                                        <td>{new Date(log.createdAt).toLocaleString()}</td>
+                                        <td>{log.user?.name || 'System'}</td>
+                                        <td style={{ fontWeight: 500 }}>{product ? product.name : `Product #${log.entityId}`}</td>
+                                        <td><span className="badge badge-success" style={{ fontSize: '0.9rem' }}>+{details.addedQty || 0}</span></td>
+                                        <td className="text-muted">{details.supplierInfo || '-'}</td>
+                                        <td className="text-muted" style={{ fontFamily: 'monospace' }}>{details.referenceNo || '-'}</td>
+                                        <td className="text-muted">{details.invoiceNo || '-'}</td>
+                                    </tr>
+                                )
+                            })}
+                            {purchaseLogs.length === 0 && (
+                                <tr><td colSpan={5} className="text-center py-8 text-muted">No stock purchase logs found.</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        );
+    };
+
     const renderInventoryAudits = () => (
         <div>
             {isCreatingAudit ? (
@@ -319,15 +367,16 @@ export default function Audits() {
     );
 
     return (
-        <div className="page">
-            <div className="page-header">
+        <div className="flex flex-col h-full bg-[#f8fafc]">
+            <header className="h-[60px] bg-white border-b border-slate-200 px-6 shrink-0 flex items-center justify-between">
                 <div>
-                    <h1 className="flex items-center gap-2">
+                    <h1 className="flex items-center gap-2 flex items-center gap-2 text-[20px] font-bold text-slate-900 tracking-tight">
                         <ShieldAlert className="icon-lg" style={{ color: 'var(--primary)' }} /> Audit & Logs
                     </h1>
-                    <p>System activity and physical stock tracking</p>
+                    <p className="text-[11px] text-slate-500 font-medium">System activity and physical stock tracking</p>
                 </div>
-            </div>
+            </header>
+            <main className="flex-1 p-5 overflow-y-auto w-full">
 
             <div className="tabs mb-6 flex gap-4">
                 <button 
@@ -337,6 +386,12 @@ export default function Audits() {
                     <History className="icon" /> System Logs
                 </button>
                 <button 
+                    className={`btn ${activeTab === 'purchases' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setActiveTab('purchases')}
+                >
+                    <Package className="icon" /> Stock Purchases
+                </button>
+                <button 
                     className={`btn ${activeTab === 'inventory' ? 'btn-primary' : 'btn-secondary'}`}
                     onClick={() => setActiveTab('inventory')}
                 >
@@ -344,7 +399,8 @@ export default function Audits() {
                 </button>
             </div>
 
-            {activeTab === 'system' ? renderSystemLogs() : renderInventoryAudits()}
+            {activeTab === 'system' ? renderSystemLogs() : activeTab === 'purchases' ? renderStockPurchases() : renderInventoryAudits()}
+        </main>
         </div>
     );
 }

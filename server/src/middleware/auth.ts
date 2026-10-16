@@ -7,6 +7,8 @@ export interface AuthRequest extends Request {
         email: string;
         role: string;
         name: string;
+        permissions?: string[];
+        branchId?: number;
     };
 }
 
@@ -30,7 +32,15 @@ export function authenticate(req: AuthRequest, res: Response, next: NextFunction
 
 export function authorize(...roles: string[]) {
     return (req: AuthRequest, res: Response, next: NextFunction): void => {
-        if (!req.user || !roles.includes(req.user.role)) {
+        if (!req.user) {
+            res.status(401).json({ error: 'Unauthorized.' });
+            return;
+        }
+
+        const hasRole = roles.includes(req.user.role);
+        const hasWildcard = req.user.permissions?.includes('*');
+
+        if (!hasRole && !hasWildcard) {
             res.status(403).json({ error: 'Forbidden. Insufficient permissions.' });
             return;
         }

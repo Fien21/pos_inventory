@@ -6,6 +6,7 @@ interface User {
     name: string;
     email: string;
     role: string;
+    permissions?: string[];
 }
 
 interface AuthContextType {
@@ -58,6 +59,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 setUser(parsed.user);
                 setToken(parsed.token);
                 axios.defaults.headers.common['Authorization'] = `Bearer ${parsed.token}`;
+
+                // Validate and refresh active user and dynamic permissions from server
+                axios.get('/api/auth/me', { headers: { Authorization: `Bearer ${parsed.token}` } })
+                    .then((res) => {
+                        if (res.data && res.data.user) {
+                            setUser(res.data.user);
+                            localStorage.setItem('shadow-apollo-auth', JSON.stringify({ user: res.data.user, token: parsed.token }));
+                        }
+                    })
+                    .catch(() => {
+                        // If token is invalid, interceptor or error will handle
+                    });
             } catch {
                 localStorage.removeItem('shadow-apollo-auth');
             }

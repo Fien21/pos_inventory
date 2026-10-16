@@ -10,6 +10,8 @@ interface BrandingContextType {
     hasPosPin: boolean;
     emailDomain: string;
     maintenanceMode: boolean;
+    receiptFooter: string;
+    receiptPolicy: string;
     loading: boolean;
     updateSettings: (
         appName: string,
@@ -20,7 +22,9 @@ interface BrandingContextType {
         posPin?: string | null,
         posPinLength?: number,
         emailDomain?: string,
-        maintenanceMode?: boolean
+        maintenanceMode?: boolean,
+        receiptFooter?: string,
+        receiptPolicy?: string
     ) => Promise<void>;
     refreshSettings: () => Promise<void>;
 }
@@ -42,6 +46,8 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
     const [hasPosPin, setHasPosPin] = useState<boolean>(false);
     const [emailDomain, setEmailDomain] = useState<string>('shadow.com');
     const [maintenanceMode, setMaintenanceMode] = useState<boolean>(false);
+    const [receiptFooter, setReceiptFooter] = useState<string>('Thank you for shopping with us!');
+    const [receiptPolicy, setReceiptPolicy] = useState<string>('No return, no exchange after 7 days.');
     const [loading, setLoading] = useState<boolean>(true);
 
     const fetchSettings = async () => {
@@ -56,6 +62,8 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
                 setHasPosPin(!!res.data.hasPosPin);
                 setEmailDomain(res.data.emailDomain || 'shadow.com');
                 setMaintenanceMode(!!res.data.maintenanceMode);
+                setReceiptFooter(res.data.receiptFooter || 'Thank you for shopping with us!');
+                setReceiptPolicy(res.data.receiptPolicy || 'No return, no exchange after 7 days.');
                 document.title = `${res.data.appName} — ${res.data.subtitle}`;
             }
         } catch (error) {
@@ -79,7 +87,9 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
         posPin?: string | null,
         posPinLength?: number,
         emailDomainInput?: string,
-        maintenanceModeInput?: boolean
+        maintenanceModeInput?: boolean,
+        receiptFooterInput?: string,
+        receiptPolicyInput?: string
     ) => {
         try {
             const formData = new FormData();
@@ -104,6 +114,12 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
             if (maintenanceModeInput !== undefined) {
                 formData.append('maintenanceMode', String(maintenanceModeInput));
             }
+            if (receiptFooterInput !== undefined) {
+                formData.append('receiptFooter', receiptFooterInput);
+            }
+            if (receiptPolicyInput !== undefined) {
+                formData.append('receiptPolicy', receiptPolicyInput);
+            }
 
             const res = await axios.put('/api/settings', formData, {
                 headers: {
@@ -120,6 +136,8 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
                 setHasPosPin(!!res.data.hasPosPin);
                 setEmailDomain(res.data.emailDomain || 'shadow.com');
                 setMaintenanceMode(!!res.data.maintenanceMode);
+                setReceiptFooter(res.data.receiptFooter || 'Thank you for shopping with us!');
+                setReceiptPolicy(res.data.receiptPolicy || 'No return, no exchange after 7 days.');
                 document.title = `${res.data.appName} — ${res.data.subtitle}`;
             }
         } catch (error) {
@@ -139,6 +157,8 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
                 hasPosPin,
                 emailDomain,
                 maintenanceMode,
+                receiptFooter,
+                receiptPolicy,
                 loading,
                 updateSettings,
                 refreshSettings: fetchSettings,

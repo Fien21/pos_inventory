@@ -2,14 +2,18 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useBranding } from '../context/BrandingContext';
 import Swal from 'sweetalert2';
-import { Save, Upload, Trash2 } from 'lucide-react';
+import { Save, Upload, Trash2, Shield, MonitorSmartphone, XCircle } from 'lucide-react';
+import { useLicense } from '../context/LicenseContext';
+import axios from 'axios';
 
 export default function Settings() {
-    const { name, subtitle, logoIcon, logoUrl, posPinLength, hasPosPin, emailDomain, maintenanceMode, updateSettings } = useBranding();
+    const { name, subtitle, logoIcon, logoUrl, posPinLength, hasPosPin, emailDomain, maintenanceMode, receiptFooter, receiptPolicy, updateSettings } = useBranding();
     const [appName, setAppName] = useState(name);
     const [appSubtitle, setAppSubtitle] = useState(subtitle);
     const [appLogoIcon, setAppLogoIcon] = useState(logoIcon);
     const [maintenanceModeState, setMaintenanceModeState] = useState<boolean>(maintenanceMode || false);
+    const [receiptFooterState, setReceiptFooterState] = useState<string>(receiptFooter || '');
+    const [receiptPolicyState, setReceiptPolicyState] = useState<string>(receiptPolicy || '');
     const [logoFile, setLogoFile] = useState<File | null>(null);
     const [logoPreview, setLogoPreview] = useState<string | null>(logoUrl);
     const [removeLogo, setRemoveLogo] = useState(false);
@@ -31,6 +35,56 @@ export default function Settings() {
         return limit ? parseInt(limit) : 15;
     });
 
+    // Device Management
+    const { expiry, clientInfo, deviceId: currentDeviceId } = useLicense();
+    const [registeredDevices, setRegisteredDevices] = useState<any[]>([]);
+    const [loadingDevices, setLoadingDevices] = useState(false);
+
+    const fetchDevices = async () => {
+        try {
+            setLoadingDevices(true);
+            const res = await axios.get('/api/license/devices');
+            if (res.data.success) {
+                setRegisteredDevices(res.data.devices);
+            }
+        } catch (error) {
+            console.error('Failed to fetch devices', error);
+        } finally {
+            setLoadingDevices(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchDevices();
+    }, []);
+
+    const revokeDevice = async (id: string) => {
+        const result = await Swal.fire({
+            title: 'Revoke Device Access?',
+            text: 'If you revoke this device, it will immediately lose access to the POS and will require the license key to re-register.',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#ef4444',
+            cancelButtonColor: 'var(--bg-hover)',
+            confirmButtonText: 'Yes, Revoke Access'
+        });
+
+        if (result.isConfirmed) {
+            try {
+                await axios.delete(`/api/license/devices/${id}`);
+                Swal.fire('Revoked!', 'The device has been revoked.', 'success');
+                fetchDevices();
+                
+                // If they revoked themselves, reload page to trigger lockout
+                if (id === currentDeviceId) {
+                    window.location.reload();
+                }
+            } catch (error) {
+                Swal.fire('Error', 'Failed to revoke device.', 'error');
+            }
+        }
+    };
+
     // Sync state when context values load
     useEffect(() => {
         setAppName(name);
@@ -40,7 +94,9 @@ export default function Settings() {
         setPinLength(posPinLength || 4);
         setDomainName(emailDomain || 'shadow.com');
         setMaintenanceModeState(maintenanceMode || false);
-    }, [name, subtitle, logoIcon, logoUrl, posPinLength, emailDomain, maintenanceMode]);
+        setReceiptFooterState(receiptFooter || '');
+        setReceiptPolicyState(receiptPolicy || '');
+    }, [name, subtitle, logoIcon, logoUrl, posPinLength, emailDomain, maintenanceMode, receiptFooter, receiptPolicy]);
 
     // Cleanup object URLs to prevent memory leaks
     useEffect(() => {
@@ -74,6 +130,46 @@ export default function Settings() {
         setRemoveLogo(true);
         if (fileInputRef.current) {
             fileInputRef.current.value = '';
+        }
+    };
+
+    const handleClearData = async () => {
+        const result = await Swal.fire({
+            title: 'Are you absolutely sure?',
+            text: 'This will PERMANENTLY DELETE all products, categories, transactions, stock items, and audit logs. You cannot undo this!',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#ef4444',
+            cancelButtonColor: 'var(--bg-hover)',
+            confirmButtonText: 'Yes, DELETE ALL DATA',
+            cancelButtonText: 'Cancel'
+        });
+
+        if (result.isConfirmed) {
+            try {
+                await axios.post('/api/settings/clear-data', {});
+                
+                await Swal.fire({
+                    icon: 'success',
+                    title: 'Data Cleared!',
+                    text: 'All product and transaction data has been removed.',
+                    background: 'var(--bg-secondary)',
+                    color: 'var(--text-primary)',
+                    confirmButtonColor: 'var(--accent)',
+                });
+                
+                // Force a page reload so state/cache is cleared across the dashboard and POS
+                window.location.reload();
+            } catch (err: any) {
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Failed to Clear Data',
+                    text: err.response?.data?.error || 'An error occurred.',
+                    background: 'var(--bg-secondary)',
+                    color: 'var(--text-primary)',
+                    confirmButtonColor: 'var(--accent)',
+                });
+            }
         }
     };
 
@@ -117,7 +213,7 @@ export default function Settings() {
             localStorage.setItem('shadow-apollo-break-limit', breakTimeLimit.toString());
             window.dispatchEvent(new Event('storage')); // Trigger update across components
 
-            await updateSettings(appName, appSubtitle, appLogoIcon, logoFile, removeLogo, targetPin, pinLength, cleanDomain, maintenanceModeState);
+            await updateSettings(appName, appSubtitle, appLogoIcon, logoFile, removeLogo, targetPin, pinLength, cleanDomain, maintenanceModeState, receiptFooterState, receiptPolicyState);
             
             await Swal.fire({
                 icon: 'success',
@@ -147,13 +243,14 @@ export default function Settings() {
     };
 
     return (
-        <div className="page">
-            <div className="page-header">
+        <div className="flex flex-col h-full bg-[#f8fafc]">
+            <header className="h-[60px] bg-white border-b border-slate-200 px-6 shrink-0 flex items-center justify-between">
                 <div>
-                    <h1>System Settings</h1>
+                    <h1 className="text-[20px] font-bold text-slate-900 tracking-tight">System Settings</h1>
                     <p style={{ color: 'var(--text-muted)', marginTop: '4px' }}>Configure global application branding and security</p>
                 </div>
-            </div>
+            </header>
+            <main className="flex-1 p-5 overflow-y-auto w-full">
 
             <motion.div
                 className="card form-card"
@@ -415,13 +512,118 @@ export default function Settings() {
                         </p>
                     </div>
 
-                    <div className="form-actions" style={{ marginTop: '10px' }}>
+                    <hr style={{ border: '0', borderTop: '1px solid var(--border)', margin: '10px 0' }} />
+                    
+                    <h3 style={{ fontSize: '1.1rem', fontWeight: '600', color: 'var(--text-primary)' }}>Receipt Customization</h3>
+                    
+                    <div className="form-group">
+                        <label>Receipt Footer Message</label>
+                        <textarea
+                            value={receiptFooterState}
+                            onChange={(e) => setReceiptFooterState(e.target.value)}
+                            placeholder="e.g. Thank you for shopping with us!"
+                            rows={2}
+                            style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontFamily: 'inherit', resize: 'vertical' }}
+                        />
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '6px' }}>
+                            This message appears at the bottom of the printed receipt, above the return policy.
+                        </p>
+                    </div>
+
+                    <div className="form-group">
+                        <label>Return Policy Text</label>
+                        <textarea
+                            value={receiptPolicyState}
+                            onChange={(e) => setReceiptPolicyState(e.target.value)}
+                            placeholder="e.g. No return, no exchange after 7 days."
+                            rows={2}
+                            style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontFamily: 'inherit', resize: 'vertical' }}
+                        />
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '6px' }}>
+                            This text appears at the very bottom of the receipt to outline your store's return policy.
+                        </p>
+                    </div>
+
+                    <hr style={{ border: '0', borderTop: '1px solid var(--border)', margin: '10px 0' }} />
+                    
+                    <h3 style={{ fontSize: '1.1rem', fontWeight: '600', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Shield size={20} style={{ color: 'var(--accent)' }}/> License & Device Management
+                    </h3>
+                    
+                    <div style={{ background: 'var(--bg-primary)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                        <div style={{ marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid var(--border)' }}>
+                            <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px' }}>Active Subscription</div>
+                            {expiry ? (
+                                <div style={{ color: 'var(--success)' }}>Valid until {new Date(expiry).toLocaleDateString()}</div>
+                            ) : (
+                                <div style={{ color: 'var(--danger)' }}>No active subscription</div>
+                            )}
+                            {clientInfo?.name && (
+                                <div style={{ marginTop: '8px', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                                    Registered to: {clientInfo.name} ({clientInfo.address})
+                                </div>
+                            )}
+                        </div>
+
+                        <div style={{ fontWeight: '600', color: 'var(--text-primary)', marginBottom: '12px' }}>Registered Devices ({registeredDevices.length})</div>
+                        {loadingDevices ? (
+                            <div style={{ color: 'var(--text-muted)' }}>Loading devices...</div>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                {registeredDevices.map(device => (
+                                    <div key={device.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-secondary)', padding: '12px', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                            <MonitorSmartphone size={20} style={{ color: device.id === currentDeviceId ? 'var(--accent)' : 'var(--text-muted)' }} />
+                                            <div>
+                                                <div style={{ fontSize: '0.9rem', fontWeight: '500', color: 'var(--text-primary)' }}>
+                                                    Device ID: {device.id.substring(0, 12)}...
+                                                    {device.id === currentDeviceId && <span style={{ marginLeft: '8px', background: 'var(--accent)', color: '#fff', fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px' }}>THIS DEVICE</span>}
+                                                </div>
+                                                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                                    Browser: {device.userAgent?.split(' ')[0] || 'Unknown'} | Registered: {new Date(device.createdAt).toLocaleDateString()}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <button 
+                                            type="button" 
+                                            onClick={() => revokeDevice(device.id)}
+                                            style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                                        >
+                                            <XCircle size={16} /> Revoke
+                                        </button>
+                                    </div>
+                                ))}
+                                {registeredDevices.length === 0 && (
+                                    <div style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>No devices registered.</div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="form-actions" style={{ marginTop: '20px' }}>
                         <button type="submit" className="btn btn-primary" disabled={saving}>
                             <Save size={18} /> {saving ? 'Saving...' : 'Save Settings'}
                         </button>
                     </div>
                 </form>
+
+                <div style={{ marginTop: '40px', background: '#fef2f2', border: '1px solid #fca5a5', padding: '20px', borderRadius: '8px' }}>
+                    <h3 style={{ fontSize: '1.2rem', color: '#b91c1c', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Shield size={24} /> Danger Zone
+                    </h3>
+                    <p style={{ color: '#991b1b', marginBottom: '16px', fontSize: '0.95rem' }}>
+                        Wipe all product, category, stock, and transaction data from the database. Settings and user accounts will be kept. This cannot be undone!
+                    </p>
+                    <button 
+                        type="button" 
+                        onClick={handleClearData} 
+                        style={{ background: '#ef4444', color: 'white', border: 'none', padding: '10px 16px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
+                    >
+                        <XCircle size={18} /> Delete All Data
+                    </button>
+                </div>
             </motion.div>
+        </main>
         </div>
     );
 }

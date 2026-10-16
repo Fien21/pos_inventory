@@ -10,7 +10,7 @@ const router = Router();
 router.get('/', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const products = await prisma.product.findMany({
-            include: { category: true, stockItems: true } as any,
+            include: { category: true, stockItems: true, bundleItems: { include: { product: true } } } as any,
             orderBy: { createdAt: 'desc' },
         });
         res.json(products);
@@ -42,7 +42,7 @@ router.get('/search', authenticate, async (req: AuthRequest, res: Response): Pro
 
         const products = await prisma.product.findMany({
             where,
-            include: { category: true, stockItems: true } as any,
+            include: { category: true, stockItems: true, bundleItems: { include: { product: true } } } as any,
             orderBy: { createdAt: 'desc' },
         });
         res.json(products);
@@ -56,25 +56,31 @@ router.get('/search', authenticate, async (req: AuthRequest, res: Response): Pro
 router.get('/lookup/:barcode', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const { barcode } = req.params;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
         const response = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json?fields=code,product_name,brands,categories,image_front_url`, {
             headers: {
                 'User-Agent': 'ShadowApolloPOS - InventoryLookup - Version 1.0 (contact@yourdomain.com)'
             },
-            signal: AbortSignal.timeout(3000)
+            signal: controller.signal
         });
+        clearTimeout(timeoutId);
         if (!response.ok) {
+            if (response.status === 404) {
+                res.json({ status: 0, message: 'Product not found' });
+                return;
+            }
             res.status(response.status).json({ error: 'Failed to lookup product.' });
             return;
         }
         const data = await response.json();
         res.json(data);
     } catch (error: any) {
-        if (error.name === 'TimeoutError' || error.code === 'UND_ERR_CONNECT_TIMEOUT') {
-            console.error('Lookup product error: Connection to Open Food Facts timed out.');
-        } else {
-            console.error('Lookup product error:', error.message);
+        console.error('Lookup product error:', error.name || 'Unknown', error.message || error);
+        if (!res.headersSent) {
+            res.status(500).json({ error: error.name === 'AbortError' ? 'API Timeout' : error.message || 'Failed to lookup product.' });
         }
-        res.status(500).json({ error: 'Failed to lookup product (API Timeout).' });
     }
 });
 
@@ -97,20 +103,18 @@ router.get('/search-off', authenticate, async (req: AuthRequest, res: Response):
         });
         
         if (!response.ok) {
-            res.status(response.status).json({ error: 'Failed to search products.' });
+            // Return an empty array instead of a 5xx error so the frontend doesn't throw a console error while typing
+            res.json({ products: [] });
             return;
         }
         
         const data = await response.json();
         res.json(data);
     } catch (error: any) {
-        if (error.name === 'TimeoutError' || error.code === 'UND_ERR_CONNECT_TIMEOUT') {
-            console.error('Search OFF error: Connection to Open Food Facts timed out.');
-        } else {
-            console.error('Search OFF error:', error.message);
+        console.error('Search OFF error:', error.name || 'Unknown', error.message || error);
+        if (!res.headersSent) {
+            res.json({ products: [] });
         }
-        // Return an empty array instead of a 500 error so the frontend doesn't throw a console error while typing
-        res.json({ products: [] });
     }
 });
 
@@ -119,7 +123,7 @@ router.get('/:id', authenticate, async (req: AuthRequest, res: Response): Promis
     try {
         const product = await prisma.product.findUnique({
             where: { id: Number(req.params.id) },
-            include: { category: true, stockItems: true } as any,
+            include: { category: true, stockItems: true, bundleItems: { include: { product: true } } } as any,
         });
         if (!product) {
             res.status(404).json({ error: 'Product not found.' });
@@ -140,7 +144,7 @@ router.post(
     upload.single('image'),
     async (req: AuthRequest, res: Response): Promise<void> => {
         try {
-            const { name, description, price, retailPrice, costPrice, taxRate, taxInclusive, stockQty, categoryId, barcode, serialNumbers, autoGenerateSn } = req.body;
+            const { name, description, price, retailPrice, costPrice, taxRate, taxInclusive, stockQty, categoryId, barcode, serialNumbers, autoGenerateSn, isBundle, bundleItems } = req.body;
 
             const finalBarcode = barcode || generateBarcodeString();
 
@@ -190,14 +194,23 @@ router.post(
                     imageUrl,
                     stockQty: targetQty,
                     categoryId: parseInt(categoryId),
+                    isBundle: isBundle === 'true' || isBundle === true,
                     stockItems: {
                         create: finalSns.map(sn => ({
                             serialNumber: sn,
                             status: 'AVAILABLE'
                         }))
-                    }
+                    },
+                    ...((isBundle === 'true' || isBundle === true) && bundleItems ? {
+                        bundleItems: {
+                            create: JSON.parse(bundleItems).map((i: any) => ({
+                                productId: parseInt(i.productId),
+                                quantity: parseInt(i.quantity) || 1
+                            }))
+                        }
+                    } : {})
                 } as any,
-                include: { category: true, stockItems: true } as any,
+                include: { category: true, stockItems: true, bundleItems: { include: { product: true } } } as any,
             });
 
             res.status(201).json({ ...product, barcodeImageUrl });
@@ -217,7 +230,7 @@ router.put(
     async (req: AuthRequest, res: Response): Promise<void> => {
         try {
             const id = Number(req.params.id);
-            const { name, description, price, retailPrice, costPrice, taxRate, taxInclusive, stockQty, categoryId, serialNumbers, autoGenerateSn } = req.body;
+            const { name, description, price, retailPrice, costPrice, taxRate, taxInclusive, stockQty, categoryId, serialNumbers, autoGenerateSn, isBundle, bundleItems } = req.body;
 
             const data: any = {};
             if (name !== undefined) data.name = name;
@@ -228,17 +241,31 @@ router.put(
             if (taxRate !== undefined) data.taxRate = parseFloat(taxRate);
             if (taxInclusive !== undefined) data.taxInclusive = taxInclusive === 'true' || taxInclusive === true;
             if (categoryId !== undefined) data.categoryId = parseInt(categoryId);
+            if (isBundle !== undefined) data.isBundle = isBundle === 'true' || isBundle === true;
             if (req.file) {
                 data.imageUrl = `/uploads/products/${req.file.filename}`;
             } else if (req.body.removeImage === 'true') {
                 data.imageUrl = null;
             }
 
+            // Handle Bundle Items
+            if (data.isBundle && bundleItems) {
+                await (prisma as any).bundleItem.deleteMany({ where: { bundleId: id } });
+                data.bundleItems = {
+                    create: JSON.parse(bundleItems).map((i: any) => ({
+                        productId: parseInt(i.productId),
+                        quantity: parseInt(i.quantity) || 1
+                    }))
+                };
+            } else if (isBundle !== undefined && !data.isBundle) {
+                await (prisma as any).bundleItem.deleteMany({ where: { bundleId: id } });
+            }
+
             // Update standard product fields
             let product = await prisma.product.update({
                 where: { id },
                 data,
-                include: { category: true, stockItems: true } as any,
+                include: { category: true, stockItems: true, bundleItems: { include: { product: true } } } as any,
             });
 
             const prodName = name || product.name;
@@ -304,7 +331,7 @@ router.put(
                 product = await prisma.product.update({
                     where: { id },
                     data: { stockQty: finalStockQty },
-                    include: { category: true, stockItems: true } as any
+                    include: { category: true, stockItems: true, bundleItems: { include: { product: true } } } as any
                 });
             } else if (stockQty !== undefined) {
                 // If serialNumbers is not provided, adjust the auto-generated ones according to stockQty
@@ -338,7 +365,65 @@ router.put(
                 product = await prisma.product.update({
                     where: { id },
                     data: { stockQty: finalStockQty },
-                    include: { category: true, stockItems: true } as any
+                    include: { category: true, stockItems: true, bundleItems: { include: { product: true } } } as any
+                });
+            }
+            if (req.body.isStockPurchase) {
+                // Find or create supplier for the PO
+                let supplierId = 1; // Fallback
+                if (req.body.supplierInfo && req.body.supplierInfo !== 'N/A' && req.body.supplierInfo !== '') {
+                    const sup = await prisma.supplier.findFirst({ where: { name: req.body.supplierInfo } });
+                    if (sup) supplierId = sup.id;
+                    else {
+                        const newSup = await prisma.supplier.create({ data: { name: req.body.supplierInfo } });
+                        supplierId = newSup.id;
+                    }
+                } else {
+                    const defaultSup = await prisma.supplier.findFirst({ where: { name: 'Unknown Supplier' } });
+                    if (defaultSup) {
+                        supplierId = defaultSup.id;
+                    } else {
+                        const newSup = await prisma.supplier.create({ data: { name: 'Unknown Supplier' } });
+                        supplierId = newSup.id;
+                    }
+                }
+
+                const addedQty = Number(req.body.addedQty) || 0;
+                
+                // Automatically create and receive the Purchase Order
+                await prisma.purchaseOrder.create({
+                    data: {
+                        supplierId: supplierId,
+                        referenceNo: req.body.referenceNo || 'N/A',
+                        invoiceNo: req.body.invoiceNo || 'N/A',
+                        status: 'RECEIVED',
+                        totalAmount: addedQty * (product.costPrice || 0),
+                        receivedAt: new Date(),
+                        items: {
+                            create: [{
+                                productId: Number(id),
+                                expectedQuantity: addedQty,
+                                receivedQuantity: addedQty,
+                                unitCost: product.costPrice || 0,
+                                totalCost: addedQty * (product.costPrice || 0)
+                            }]
+                        }
+                    }
+                });
+
+                await prisma.auditLog.create({
+                    data: {
+                        userId: (req as any).user?.id || null,
+                        action: 'STOCK_PURCHASE',
+                        entity: 'Product',
+                        entityId: Number(id),
+                        details: JSON.stringify({
+                            addedQty: req.body.addedQty,
+                            supplierInfo: req.body.supplierInfo || 'N/A',
+                            referenceNo: req.body.referenceNo || 'N/A',
+                            invoiceNo: req.body.invoiceNo || 'N/A'
+                        })
+                    }
                 });
             }
 

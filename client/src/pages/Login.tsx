@@ -16,6 +16,14 @@ export default function Login() {
     const navigate = useNavigate();
     const { name, subtitle, logoUrl, emailDomain } = useBranding();
 
+    const getGreeting = () => {
+        const hour = new Date().getHours();
+        if (hour < 12) return 'Good morning';
+        if (hour === 12) return 'Good noon';
+        if (hour < 18) return 'Good afternoon';
+        return 'Good evening';
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
@@ -23,7 +31,7 @@ export default function Login() {
             await login(email, password);
             await Swal.fire({
                 icon: 'success',
-                title: 'Welcome!',
+                title: `${getGreeting()}!`,
                 text: 'Login successful',
                 timer: 1500,
                 showConfirmButton: false,
@@ -73,7 +81,7 @@ export default function Login() {
                 await rfidLogin(rfidUid, pin);
                 await Swal.fire({
                     icon: 'success',
-                    title: 'Welcome!',
+                    title: `${getGreeting()}!`,
                     timer: 1000,
                     showConfirmButton: false,
                     background: 'var(--bg-secondary)',
@@ -207,8 +215,8 @@ export default function Login() {
                     <div className="input-group">
                         <Mail size={18} className="input-icon" />
                         <input
-                            type="email"
-                            placeholder="Email address"
+                            type="text"
+                            placeholder="Username or Email address"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             required

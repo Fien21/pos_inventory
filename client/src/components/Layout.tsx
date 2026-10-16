@@ -1,8 +1,8 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
-import Swal from 'sweetalert2';
 import {
     LayoutDashboard,
     Package,
@@ -16,401 +16,284 @@ import {
     Layers,
     CreditCard,
     ShieldAlert,
-    FileText,
+    Truck,
+    Clock,
+    BarChart3,
+    Archive,
+    RotateCcw,
+    Wallet,
+    ClipboardList,
+    RefreshCw,
+    ScanLine,
+    Search,
+    MonitorSmartphone,
+    Grid,
+    CircleDot,
+    UserCog,
+    Tag
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
 import { useBranding } from '../context/BrandingContext';
 
 export default function Layout() {
-    const { user, logout, logActivity } = useAuth();
+    const { user, logout } = useAuth();
     const navigate = useNavigate();
     const [sidebarOpen, setSidebarOpen] = useState(false);
-    const [isOnBreak, setIsOnBreak] = useState(() => localStorage.getItem('shadow-apollo-break') === 'true');
-    const [breakStartTime, setBreakStartTime] = useState<number | null>(() => {
-        const time = localStorage.getItem('shadow-apollo-break-time');
-        return time ? parseInt(time) : null;
-    });
-    const [breakTimeLimit, setBreakTimeLimit] = useState(() => {
-        const limit = localStorage.getItem('shadow-apollo-break-limit');
-        return limit ? parseInt(limit) : 15;
-    });
-    const [notepadOpen, setNotepadOpen] = useState(false);
-    const [notes, setNotes] = useState(() => localStorage.getItem('shadow-apollo-notes') || '');
     const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
-    const { name, subtitle, logoIcon, logoUrl, hasPosPin, posPinLength } = useBranding();
+    const { name } = useBranding();
+
+    const [lowStockCount, setLowStockCount] = useState<number | null>(null);
+    const [tillBalance, setTillBalance] = useState<number | null>(null);
 
     useEffect(() => {
-        const handleResize = () => {
-            setIsMobile(window.innerWidth <= 768);
-        };
+        const handleResize = () => setIsMobile(window.innerWidth <= 768);
+
         window.addEventListener('resize', handleResize);
-        
-        // Listen for storage events in case admin changes break limit in another tab
-        const handleStorageChange = () => {
-            const limit = localStorage.getItem('shadow-apollo-break-limit');
-            if (limit) setBreakTimeLimit(parseInt(limit));
+
+        const fetchStats = () => {
+            axios.get('/api/transactions/stats/dashboard')
+                .then(res => setLowStockCount(res.data.lowStockProducts || 0))
+                .catch(console.error);
+
+            axios.get('/api/shifts/till/data')
+                .then(res => setTillBalance(res.data.currentBalance || 0))
+                .catch(console.error);
         };
-        window.addEventListener('storage', handleStorageChange);
-        
+
+        fetchStats();
+        const interval = setInterval(fetchStats, 10000);
+
         return () => {
             window.removeEventListener('resize', handleResize);
-            window.removeEventListener('storage', handleStorageChange);
+            clearInterval(interval);
         };
     }, []);
-
-    useEffect(() => {
-        localStorage.setItem('shadow-apollo-notes', notes);
-    }, [notes]);
-
-    useEffect(() => {
-        localStorage.setItem('shadow-apollo-break', isOnBreak.toString());
-        if (breakStartTime) {
-            localStorage.setItem('shadow-apollo-break-time', breakStartTime.toString());
-        } else {
-            localStorage.removeItem('shadow-apollo-break-time');
-        }
-    }, [isOnBreak, breakStartTime]);
 
     const handleLogout = async () => {
         await logout();
         navigate('/login');
     };
 
-    const handleBreak = async (action: 'BREAK_IN' | 'BREAK_OUT') => {
-        const { value: inputVal } = await Swal.fire({
-            title: 'Admin Authorization Required',
-            text: 'Swipe Admin RFID Card or enter Admin PIN code to authorize this break log.',
-            input: 'password',
-            inputPlaceholder: 'RFID Swipe / Admin PIN',
-            inputAttributes: {
-                autocapitalize: 'off',
-                autocorrect: 'off',
-                autocomplete: 'new-password'
-            },
-            showCancelButton: true,
-            confirmButtonText: 'Verify',
-            confirmButtonColor: 'var(--accent)',
-            cancelButtonColor: 'var(--bg-hover)',
-            background: 'var(--bg-secondary)',
-            color: 'var(--text-primary)',
-            inputValidator: (value) => {
-                if (!value) {
-                    return 'Verification code/password is required!';
-                }
-            }
-        });
-
-        if (!inputVal) {
-            return;
-        }
-
-        try {
-            const verifyRes = await axios.post('/api/settings/verify-pin', { value: inputVal });
-            if (verifyRes.data && verifyRes.data.valid) {
-                await logActivity(action);
-                
-                if (action === 'BREAK_IN') {
-                    setIsOnBreak(true);
-                    setBreakStartTime(Date.now());
-                } else {
-                    setIsOnBreak(false);
-                    setBreakStartTime(null);
-                }
-
-                Swal.fire({
-                    icon: 'success',
-                    title: 'Break Logged',
-                    text: `You have logged your ${action === 'BREAK_IN' ? 'Break Start' : 'Break End'}.`,
-                    background: 'var(--bg-secondary)',
-                    color: 'var(--text-primary)',
-                    timer: 2000,
-                    showConfirmButton: false
-                });
-            } else {
-                Swal.fire({
-                    icon: 'error',
-                    title: 'Access Denied',
-                    text: 'Invalid Admin PIN or Password.',
-                    background: 'var(--bg-secondary)',
-                    color: 'var(--text-primary)',
-                    confirmButtonColor: 'var(--accent)'
-                });
-            }
-        } catch (err: any) {
-            Swal.fire({
-                icon: 'error',
-                title: 'Verification Failed',
-                text: err.response?.data?.error || 'Verification error',
-                background: 'var(--bg-secondary)',
-                color: 'var(--text-primary)',
-                confirmButtonColor: 'var(--accent)'
-            });
-        }
+    const hasAccess = (perm: string) => {
+        if (!user || !user.permissions) return false;
+        if (user.permissions.includes('*')) return true;
+        return user.permissions.includes(perm);
     };
 
     const navItems = [
-        { to: '/', icon: LayoutDashboard, label: 'Dashboard', roles: ['ADMIN', 'STAFF', 'CASHIER'] },
-        { to: '/inventory', icon: Package, label: 'Inventory', roles: ['ADMIN', 'STAFF'] },
-        { to: '/categories', icon: Layers, label: 'Categories', roles: ['ADMIN', 'STAFF'] },
-        { to: '/payment-modes', icon: CreditCard, label: 'Payment Modes', roles: ['ADMIN', 'STAFF'] },
-        { to: '/pos', icon: ShoppingCart, label: 'POS', roles: ['ADMIN', 'CASHIER'] },
-        { to: '/sales', icon: Receipt, label: 'Sales History', roles: ['ADMIN', 'STAFF', 'CASHIER'] },
-        { to: '/users', icon: Users, label: 'Users', roles: ['ADMIN'] },
-        { to: '/audits', icon: ShieldAlert, label: 'Audits', roles: ['ADMIN'] },
-        { to: '/settings', icon: Settings, label: 'Settings', roles: ['ADMIN', 'STAFF'] },
+        { group: 'POINT OF SALE', to: '/', icon: LayoutDashboard, label: 'Dashboard', perm: 'DASHBOARD' },
+        { group: 'POINT OF SALE', to: '/pos', icon: ShoppingCart, label: 'POS Terminal', badge: { type: 'green', text: 'OPEN' }, shortcut: 'F2', perm: 'POS_TERMINAL' },
+
+        { group: 'POINT OF SALE', to: '/refunds', icon: RotateCcw, label: 'Refunds & Returns', perm: 'REFUNDS_RETURNS' },
+        { group: 'POINT OF SALE', to: '/layaway', icon: Archive, label: 'Layaway / Reserves', perm: 'LAYAWAY_RESERVES' },
+
+        { group: 'OPERATIONS & CASH', to: '/cash-drawer', icon: Wallet, label: 'Cash Drawer & Till', badge: { type: 'gray', text: 'Float: P5k' }, perm: 'CASH_DRAWER' },
+        { group: 'OPERATIONS & CASH', to: '/shifts', icon: ClipboardList, label: 'Shifts & X/Z Reading', badge: { type: 'gray', text: 'Morning' }, perm: 'SHIFTS_READING' },
+        { group: 'OPERATIONS & CASH', to: '/sales', icon: Receipt, label: 'Sales History & Receipts', perm: 'SALES_HISTORY' },
+        { group: 'OPERATIONS & CASH', to: '/payment-modes', icon: CreditCard, label: 'Payment Modes', perm: 'PAYMENT_MODES' },
+        { group: 'OPERATIONS & CASH', to: '/sync', icon: RefreshCw, label: 'Sync Queue', badge: { type: 'green-outline', text: '✓ Synced' }, perm: 'SYNC_QUEUE' },
+
+        { group: 'INVENTORY & CATALOG', to: '/inventory', icon: Package, label: 'Stock Inventory', badge: lowStockCount !== null && lowStockCount > 0 ? { type: 'yellow', text: `${lowStockCount} Low` } : undefined, perm: 'STOCK_INVENTORY' },
+        { group: 'INVENTORY & CATALOG', to: '/price-check', icon: ScanLine, label: 'Price Check / Scan', shortcut: 'F3', perm: 'PRICE_CHECK' },
+        { group: 'INVENTORY & CATALOG', to: '/categories', icon: Layers, label: 'Categories', perm: 'CATEGORIES' },
+        { group: 'INVENTORY & CATALOG', to: '/suppliers', icon: Truck, label: 'Suppliers & POs', perm: 'SUPPLIERS_POS' },
+
+        { group: 'CUSTOMERS & MANAGEMENT', to: '/customers', icon: Users, label: 'Loyalty & Customers', perm: 'LOYALTY_CUSTOMERS' },
+        { group: 'CUSTOMERS & MANAGEMENT', to: '/users', icon: UserCog, label: 'User & Role Management', perm: 'USER_ROLE_MGMT' },
+        { group: 'CUSTOMERS & MANAGEMENT', to: '/reports', icon: BarChart3, label: 'Reports & Analytics', perm: 'REPORTS_ANALYTICS' },
+        { group: 'CUSTOMERS & MANAGEMENT', to: '/promotions', icon: Tag, label: 'Promotions & Discounts', perm: 'SETTINGS' },
+        { group: 'CUSTOMERS & MANAGEMENT', to: '/audits', icon: ShieldAlert, label: 'Audits & Logs', perm: 'AUDITS_LOGS' },
+        { group: 'CUSTOMERS & MANAGEMENT', to: '/settings', icon: Settings, label: 'Settings', perm: 'SETTINGS' },
     ];
 
-    const filteredNavItems = navItems.filter(
-        (item) => user && item.roles.includes(user.role)
-    );
+    const filteredNavItems = navItems.filter(item => hasAccess(item.perm));
+
+    const groupedNavItems = filteredNavItems.reduce((acc, item) => {
+        if (!acc[item.group]) acc[item.group] = [];
+        acc[item.group].push(item);
+        return acc;
+    }, {} as Record<string, typeof navItems>);
+
+    const location = useLocation();
 
     return (
-        <div className="layout">
-            {/* Mobile menu toggle */}
-            <button className={`mobile-menu-btn ${sidebarOpen ? 'open' : ''}`} onClick={() => setSidebarOpen(!sidebarOpen)}>
-                {sidebarOpen ? <X size={24} /> : <Menu size={24} />}
-            </button>
+        <div className="flex min-h-screen text-slate-800 antialiased font-sans bg-[#f8fafc]">
+            {isMobile && (
+                <button 
+                    className="fixed top-4 left-4 z-50 bg-white border border-slate-200 text-slate-800 p-2 rounded-md shadow-sm"
+                    onClick={() => setSidebarOpen(!sidebarOpen)}
+                >
+                    {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
+                </button>
+            )}
+
+            {isMobile && sidebarOpen && (
+                <div className="fixed inset-0 bg-slate-900/50 z-40 backdrop-blur-sm" onClick={() => setSidebarOpen(false)} />
+            )}
 
             {/* Sidebar */}
-            <motion.aside
-                className={`sidebar ${sidebarOpen ? 'open' : ''}`}
-                initial={{ x: isMobile ? -280 : 0 }}
-                animate={{ x: isMobile ? (sidebarOpen ? 0 : -280) : 0 }}
-                transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+            <aside
+                className={`w-[260px] bg-white flex flex-col justify-between shrink-0 fixed inset-y-0 left-0 z-40 transition-transform border-r border-slate-200 ${isMobile && !sidebarOpen ? '-translate-x-full' : 'translate-x-0'}`}
             >
-                <div className="sidebar-header">
-                    <div className="logo">
-                        {logoUrl ? (
-                            <img
-                                src={logoUrl}
-                                alt="Logo"
-                                style={{ width: '32px', height: '32px', borderRadius: '6px', objectFit: 'cover', border: '1px solid #333' }}
-                            />
-                        ) : (
-                            <div className="logo-icon">{logoIcon}</div>
-                        )}
-                        <div>
-                            <h1>{name}</h1>
-                            <span className="logo-subtitle">{subtitle}</span>
+                <div className="flex flex-col h-full overflow-hidden">
+                    {/* Brand Header */}
+                    <div className="pt-5 pb-3 px-5 flex flex-col gap-4 shrink-0">
+                        <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-md bg-slate-900 text-white flex items-center justify-center shrink-0">
+                                <Grid className="w-4 h-4" />
+                            </div>
+                            <div className="leading-tight">
+                                <h1 className="font-bold text-slate-900 text-[14px] flex items-center gap-1.5">
+                                    {name || "System Admin"} <span className="text-[10px] text-slate-500 font-medium border border-slate-200 px-1 rounded bg-slate-50">POS</span>
+                                </h1>
+                                <p className="text-[11px] text-slate-500">{(user as any)?.branch?.name || "Main Store"} - Shift Morning</p>
+                            </div>
+                        </div>
+
+                        {/* Status Box */}
+                        <div className="rounded-lg border border-slate-200 p-2.5 bg-slate-50">
+                            <div className="flex items-center gap-2 mb-1.5">
+                                <MonitorSmartphone className="w-3.5 h-3.5 text-slate-500" />
+                                <span className="text-xs font-semibold text-slate-700">Register 01 (Front Counter)</span>
+                            </div>
+                            <div className="flex items-center justify-between text-[11px]">
+                                <span className="text-slate-500 flex items-center gap-1"><CircleDot className="w-2 h-2 text-emerald-500 fill-emerald-500" /> Till: <span className="font-bold text-slate-900">₱{tillBalance !== null ? tillBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '...'}</span></span>
+                                <span className="text-emerald-600 font-bold uppercase tracking-wide">ONLINE</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Navigation */}
+                    <nav className="flex-1 px-3 overflow-y-auto pb-4 custom-scrollbar">
+                        {Object.entries(groupedNavItems).map(([groupName, items]) => (
+                            <div key={groupName} className="mb-5">
+                                <div className="px-2 mb-2 text-[10px] font-bold text-slate-400 tracking-wider uppercase">
+                                    {groupName}
+                                </div>
+                                <div className="space-y-0.5">
+                                    {items.map((item) => (
+                                        <NavLink
+                                            key={item.label}
+                                            to={item.to}
+                                            className={({ isActive }) => 
+                                                `flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors text-[12px] ${
+                                                    isActive 
+                                                    ? 'bg-blue-50 text-blue-700 font-semibold relative after:absolute after:left-0 after:top-1.5 after:bottom-1.5 after:w-0.5 after:bg-blue-600 after:rounded-r-md' 
+                                                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 font-medium'
+                                                }`
+                                            }
+                                        >
+                                            {({ isActive }) => (
+                                                <div className="flex items-center justify-between w-full">
+                                                    <div className="flex items-center gap-2.5">
+                                                        <item.icon className={`w-[16px] h-[16px] ${isActive ? 'text-blue-600' : 'text-slate-400'}`} />
+                                                        <span>{item.label}</span>
+                                                    </div>
+                                                    
+                                                    <div className="flex items-center gap-1.5">
+                                                        {item.badge && (
+                                                            <span className={`text-[9px] font-bold px-1.5 py-[1px] rounded ${
+                                                                item.badge.type === 'green' ? 'bg-emerald-100 text-emerald-700' :
+                                                                item.badge.type === 'yellow' ? 'bg-amber-100 text-amber-700' :
+                                                                item.badge.type === 'gray' ? 'bg-slate-200 text-slate-600' :
+                                                                item.badge.type === 'green-outline' ? 'border border-emerald-200 text-emerald-600 bg-emerald-50' : ''
+                                                            }`}>
+                                                                {item.badge.text}
+                                                            </span>
+                                                        )}
+                                                        {item.shortcut && (
+                                                            <span className="text-[9px] font-mono border border-slate-200 bg-white text-slate-400 px-1 rounded shadow-sm">
+                                                                {item.shortcut}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </NavLink>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </nav>
+
+                    {/* Bottom Area */}
+                    <div className="border-t border-slate-200 bg-slate-50 shrink-0">
+                        <div className="p-3">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-[10px] font-bold text-slate-400 tracking-wider uppercase">QUICK TOOLS</span>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2">
+                                <button 
+                                    onClick={() => navigate('/cash-drawer')}
+                                    className="flex flex-col items-center justify-center gap-1 p-2 rounded-md bg-white border border-slate-200 hover:border-slate-300 text-slate-600 hover:text-slate-900 transition-colors"
+                                >
+                                    <Wallet className="w-4 h-4" />
+                                    <span className="text-[9px] font-semibold">Open Till</span>
+                                </button>
+                                <button 
+                                    onClick={() => navigate('/price-check')}
+                                    className="flex flex-col items-center justify-center gap-1 p-2 rounded-md bg-white border border-slate-200 hover:border-slate-300 text-slate-600 hover:text-slate-900 transition-colors"
+                                >
+                                    <ScanLine className="w-4 h-4" />
+                                    <span className="text-[9px] font-semibold">Scan SKU</span>
+                                </button>
+                                <button 
+                                    onClick={() => navigate('/pos')}
+                                    className="flex flex-col items-center justify-center gap-1 p-2 rounded-md bg-white border border-slate-200 hover:border-slate-300 text-slate-600 hover:text-slate-900 transition-colors"
+                                >
+                                    <ShoppingCart className="w-4 h-4" />
+                                    <span className="text-[9px] font-semibold">POS</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="px-4 py-2 border-t border-slate-200 flex items-center justify-between">
+                            <div>
+                                <div className="text-[11px] font-semibold text-slate-700">Pro License</div>
+                                <div className="text-[9px] text-slate-500">Expires: 6 Oct 2026</div>
+                            </div>
+                            <span className="bg-slate-900 text-white text-[9px] font-bold px-2 py-0.5 rounded uppercase">ACTIVE</span>
+                        </div>
+
+                        <div className="p-4 border-t border-slate-200 bg-white flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <div className="w-7 h-7 rounded-full bg-slate-900 text-white flex items-center justify-center text-[10px] font-bold">
+                                    SA
+                                </div>
+                                <div className="leading-tight">
+                                    <div className="text-[12px] font-bold text-slate-900">{user?.name || 'System Admin'}</div>
+                                    <div className="text-[10px] text-slate-500">{user?.role || 'ADMIN'} - Shift #1</div>
+                                </div>
+                            </div>
+                            <button onClick={handleLogout} className="text-slate-400 hover:text-red-600 transition-colors">
+                                <LogOut className="w-4 h-4" />
+                            </button>
                         </div>
                     </div>
                 </div>
-
-                <nav className="sidebar-nav">
-                    {filteredNavItems.map((item) => (
-                        <NavLink
-                            key={item.to}
-                            to={item.to}
-                            end={item.to === '/'}
-                            className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                            onClick={() => setSidebarOpen(false)}
-                        >
-                            <item.icon size={20} />
-                            <span>{item.label}</span>
-                        </NavLink>
-                    ))}
-                </nav>
-
-                <div className="sidebar-footer">
-                    <div className="user-info" style={{ marginBottom: '10px' }}>
-                        <div className="user-avatar">{user?.name?.charAt(0).toUpperCase()}</div>
-                        <div className="user-details">
-                            <span className="user-name">{user?.name}</span>
-                            <span className="user-role">{user?.role}</span>
-                        </div>
-                    </div>
-                    {user?.role !== 'ADMIN' && (
-                        <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-                            <button className="btn btn-sm" style={{ flex: 1 }} onClick={() => handleBreak('BREAK_IN')}>Break In</button>
-                            <button className="btn btn-sm" style={{ flex: 1 }} onClick={() => handleBreak('BREAK_OUT')}>Break Out</button>
-                        </div>
-                    )}
-                    <button className="logout-btn" onClick={handleLogout}>
-                        <LogOut size={18} />
-                        <span>Logout</span>
-                    </button>
-                </div>
-            </motion.aside>
-
-            {/* Overlay for mobile sidebar */}
-            {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
+            </aside>
 
             {/* Main content */}
-            <main className="main-content">
-                <Outlet />
-            </main>
-
-            {/* Break Time Frozen Overlay */}
-            <AnimatePresence>
-                {isOnBreak && breakStartTime && (
-                    <motion.div 
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        style={{
-                            position: 'fixed',
-                            top: 0, left: 0, right: 0, bottom: 0,
-                            backgroundColor: 'rgba(15, 15, 25, 0.95)',
-                            backdropFilter: 'blur(8px)',
-                            zIndex: 99999,
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: 'white',
-                            fontFamily: 'var(--font)'
-                        }}
-                    >
-                        <h1 style={{ fontSize: '3.5rem', color: 'var(--accent)', margin: '0 0 10px 0', textTransform: 'uppercase', letterSpacing: '4px' }}>ON BREAK</h1>
-                        
-                        <BreakTimer startTime={breakStartTime} limitMinutes={breakTimeLimit} />
-                        
-                        <div style={{ 
-                            marginTop: '40px', 
-                            padding: '25px', 
-                            background: 'var(--bg-primary)', 
-                            border: '1px solid var(--border)', 
-                            borderRadius: '12px', 
-                            maxWidth: '500px', 
-                            width: '90%',
-                            boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
-                        }}>
-                            <h3 style={{ margin: '0 0 15px 0', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)', paddingBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <ShieldAlert size={20} style={{ color: 'var(--accent)' }}/> Break Time Rules
-                            </h3>
-                            <ul style={{ color: 'var(--text-muted)', fontSize: '1rem', lineHeight: '1.6', margin: 0, paddingLeft: '20px' }}>
-                                <li style={{ marginBottom: '8px' }}>Maximum allowed break time is <strong>{breakTimeLimit} minutes</strong>.</li>
-                                <li style={{ marginBottom: '8px' }}>Your POS screen is frozen and locked until you break out.</li>
-                                <li style={{ marginBottom: '8px' }}>You must authorize with Admin/Manager before ending your break.</li>
-                                <li style={{ marginBottom: '0' }}>Exceeding break limits will be recorded in the audit logs.</li>
-                            </ul>
-                        </div>
-
-                        <button 
-                            className="btn btn-primary" 
-                            style={{ 
-                                marginTop: '40px', 
-                                padding: '16px 40px', 
-                                fontSize: '1.2rem', 
-                                borderRadius: '30px',
-                                boxShadow: '0 4px 15px rgba(108, 99, 255, 0.4)',
-                                fontWeight: 'bold'
-                            }}
-                            onClick={() => handleBreak('BREAK_OUT')}
-                        >
-                            End Break (Break Out)
-                        </button>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-
-            {/* Notepad Floating Button */}
-            <div style={{ position: 'fixed', bottom: '20px', right: '20px', zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                <AnimatePresence>
-                    {notepadOpen && (
-                        <motion.div 
-                            initial={{ opacity: 0, y: 20, scale: 0.9 }} 
-                            animate={{ opacity: 1, y: 0, scale: 1 }} 
-                            exit={{ opacity: 0, y: 20, scale: 0.9 }}
-                            style={{ 
-                                background: 'var(--bg-secondary)', 
-                                border: '1px solid var(--border)', 
-                                borderRadius: '12px', 
-                                padding: '16px', 
-                                width: '320px', 
-                                height: '400px', 
-                                marginBottom: '16px',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                boxShadow: '0 8px 32px rgba(0,0,0,0.4)'
-                            }}
-                        >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                                <h3 style={{ margin: 0, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <FileText size={18} style={{ color: 'var(--accent)' }}/> Scratchpad
-                                </h3>
-                                <button className="btn-icon" onClick={() => setNotepadOpen(false)}><X size={18}/></button>
-                            </div>
-                            <textarea
-                                value={notes}
-                                onChange={(e) => setNotes(e.target.value)}
-                                placeholder="List down features or notes here..."
-                                style={{
-                                    flex: 1,
-                                    width: '100%',
-                                    resize: 'none',
-                                    background: 'var(--bg-primary)',
-                                    color: 'var(--text-primary)',
-                                    border: '1px solid var(--border)',
-                                    borderRadius: '8px',
-                                    padding: '12px',
-                                    fontFamily: 'inherit',
-                                    outline: 'none'
-                                }}
-                            />
-                        </motion.div>
-                    )}
-                </AnimatePresence>
-                <button 
-                    onClick={() => setNotepadOpen(!notepadOpen)}
-                    style={{
-                        width: '56px',
-                        height: '56px',
-                        borderRadius: '50%',
-                        background: 'var(--accent)',
-                        color: 'var(--bg-primary)',
-                        border: 'none',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-                        transition: 'transform 0.2s ease'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
-                    onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
-                >
-                    <FileText size={24} />
-                </button>
+            <div className={`flex-1 flex flex-col min-w-0 ${!isMobile ? 'pl-[260px]' : ''}`}>
+                <main className="flex-1 relative w-full h-screen overflow-hidden flex flex-col">
+                    <Outlet />
+                </main>
             </div>
-        </div>
-    );
-}
-
-// Subcomponent for the Break Timer
-function BreakTimer({ startTime, limitMinutes }: { startTime: number, limitMinutes: number }) {
-    const [elapsed, setElapsed] = useState(() => Math.floor((Date.now() - startTime) / 1000));
-    
-    useEffect(() => {
-        const interval = setInterval(() => {
-            setElapsed(Math.floor((Date.now() - startTime) / 1000));
-        }, 1000);
-        return () => clearInterval(interval);
-    }, [startTime]);
-
-    const limitSeconds = limitMinutes * 60;
-    const remaining = limitSeconds - elapsed;
-    const isOvertime = remaining < 0;
-    
-    const displayTime = Math.abs(isOvertime ? remaining : elapsed);
-    const mins = Math.floor(displayTime / 60).toString().padStart(2, '0');
-    const secs = (displayTime % 60).toString().padStart(2, '0');
-
-    return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-            <div style={{ 
-                fontSize: '5rem', 
-                fontWeight: 'bold', 
-                fontFamily: 'monospace',
-                color: isOvertime ? '#ff4b4b' : 'var(--text-primary)',
-                textShadow: isOvertime ? '0 0 20px rgba(255, 75, 75, 0.5)' : 'none',
-                lineHeight: '1'
-            }}>
-                {isOvertime && '-'}{mins}:{secs}
-            </div>
-            <div style={{ fontSize: '1.2rem', color: isOvertime ? '#ff4b4b' : 'var(--text-muted)', marginTop: '8px' }}>
-                {isOvertime ? 'OVERTIME LIMIT EXCEEDED' : 'Elapsed Time'}
-            </div>
+            
+            <style>{`
+                .custom-scrollbar::-webkit-scrollbar {
+                    width: 4px;
+                }
+                .custom-scrollbar::-webkit-scrollbar-track {
+                    background: transparent;
+                }
+                .custom-scrollbar::-webkit-scrollbar-thumb {
+                    background: #e2e8f0;
+                    border-radius: 4px;
+                }
+                .custom-scrollbar:hover::-webkit-scrollbar-thumb {
+                    background: #cbd5e1;
+                }
+            `}</style>
         </div>
     );
 }

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import axios from 'axios';
-import { Search, Receipt, Calendar, Eye, Trash2 } from 'lucide-react';
+import { Search, Receipt, Calendar, Eye, Trash2, Undo2 } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { useAuth } from '../context/AuthContext';
 import { useBranding } from '../context/BrandingContext';
@@ -17,12 +17,14 @@ interface Transaction {
     amountTendered?: number | null;
     changeAmount?: number | null;
     status: string;
+    refundStatus: string;
     createdAt: string;
     cashier: { name: string; email: string; role: string };
     items: Array<{
         id: number;
         quantity: number;
         price: number;
+        costPrice?: number | null;
         subtotal: number;
         product: { name: string; barcode: string; costPrice?: number };
         stockItems?: Array<{ id: number; serialNumber: string }>;
@@ -40,7 +42,7 @@ const generateSeriesNumber = (txnId: number, dateStr: string) => {
 
 export default function SalesHistory() {
     const { user } = useAuth();
-    const { hasPosPin, posPinLength } = useBranding();
+    const { name, hasPosPin, posPinLength, receiptFooter, receiptPolicy } = useBranding();
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     const [search, setSearch] = useState('');
     const [loading, setLoading] = useState(true);
@@ -173,6 +175,61 @@ export default function SalesHistory() {
         });
     };
 
+    const handleReturnTransaction = async (txn: Transaction) => {
+        const authorized = await requestAdminAuth();
+        if (!authorized) return;
+
+        const htmlContent = `
+            <div style="text-align: left; font-size: 0.9em;">
+                <p>Select items to return for Receipt <b>${generateSeriesNumber(txn.id, txn.createdAt)}</b>:</p>
+                ${txn.items.map(item => `
+                    <div style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
+                        <span>${item.product.name} (Max: ${item.quantity})</span>
+                        <input type="number" id="return-qty-${item.id}" max="${item.quantity}" min="0" value="0" class="swal2-input" style="width: 80px; margin: 0; padding: 4px;" />
+                    </div>
+                `).join('')}
+                <div style="margin-top: 15px;">
+                    <label>Reason for Return:</label>
+                    <input type="text" id="return-reason" class="swal2-input" placeholder="e.g. Defective" style="width: 100%; margin-top: 5px; padding: 10px; font-size: 0.9rem;" />
+                </div>
+            </div>
+        `;
+
+        Swal.fire({
+            title: 'Process Return',
+            html: htmlContent,
+            showCancelButton: true,
+            confirmButtonText: 'Process Return',
+            background: 'var(--bg-secondary)',
+            color: 'var(--text-primary)',
+            preConfirm: () => {
+                const returnItems: any[] = [];
+                txn.items.forEach(item => {
+                    const el = document.getElementById(`return-qty-${item.id}`) as HTMLInputElement;
+                    const qty = parseInt(el?.value || '0');
+                    if (qty > 0) {
+                        returnItems.push({ transactionItemId: item.id, quantity: qty, reason: (document.getElementById('return-reason') as HTMLInputElement)?.value });
+                    }
+                });
+                if (returnItems.length === 0) {
+                    Swal.showValidationMessage('Please select at least one item to return');
+                    return false;
+                }
+                return returnItems;
+            }
+        }).then(async (result) => {
+            if (result.isConfirmed) {
+                try {
+                    await axios.post(`/api/transactions/${txn.id}/return`, { returnItems: result.value });
+                    Swal.fire('Success', 'Return processed successfully', 'success');
+                    fetchTransactions();
+                } catch (err: any) {
+                    Swal.fire('Error', err.response?.data?.error || 'Failed to process return', 'error');
+                }
+            }
+        });
+    };
+
     const viewReceipt = (txn: Transaction) => {
         Swal.fire({
             title: `Receipt Details`,
@@ -209,7 +266,7 @@ export default function SalesHistory() {
 
           <!-- Customer Tab Content -->
           <div id="receipt-customer" class="receipt-tab" style="display: block; font-size: 0.9em;">
-            <h4 style="text-align: center; margin: 0 0 4px 0; font-size: 1.1em;">AZTECH POS</h4>
+            <h4 style="text-align: center; margin: 0 0 4px 0; font-size: 1.1em;">${name}</h4>
             <p style="text-align: center; margin: 0 0 10px 0; font-size: 0.8em; color: var(--text-muted);">${txn.status === 'VOIDED' ? 'VOIDED TRANSACTION' : 'Customer Copy'}</p>
             <p style="margin: 4px 0;"><strong>Receipt #:</strong> ${generateSeriesNumber(txn.id, txn.createdAt)}</p>
             <p style="margin: 4px 0;"><strong>Cashier:</strong> ${txn.cashier?.name || 'Unknown'}</p>
@@ -259,6 +316,11 @@ export default function SalesHistory() {
               <span>₱${(txn.changeAmount || 0).toFixed(2)}</span>
             </div>
             ` : ''}
+
+            <div style="margin-top: 20px; text-align: center;">
+                ${receiptFooter ? `<p style="margin: 4px 0; font-style: italic;">${receiptFooter}</p>` : ''}
+                ${receiptPolicy ? `<p style="margin: 4px 0; font-size: 0.8em; color: var(--text-muted);">${receiptPolicy}</p>` : ''}
+            </div>
           </div>
 
           <!-- Cashier/Staff Tab Content -->
@@ -334,7 +396,7 @@ export default function SalesHistory() {
               </thead>
               <tbody>
                 ${txn.items.map((i) => {
-                  const cost = i.product?.costPrice || 0;
+                  const cost = i.costPrice ?? (i.product?.costPrice || 0);
                   const retail = i.price || 0;
                   const itemCostTotal = cost * i.quantity;
                   const itemProfit = i.subtotal - itemCostTotal;
@@ -358,7 +420,7 @@ export default function SalesHistory() {
               </div>
               <div style="display: flex; justify-content: space-between; margin: 2px 0;">
                 <span>Total Cost of Goods</span>
-                <span>₱${txn.items.reduce((sum: number, i: any) => sum + (i.product?.costPrice || 0) * i.quantity, 0).toFixed(2)}</span>
+                <span>₱${txn.items.reduce((sum: number, i: any) => sum + (i.costPrice ?? (i.product?.costPrice || 0)) * i.quantity, 0).toFixed(2)}</span>
               </div>
               <div style="display: flex; justify-content: space-between; margin: 2px 0;">
                 <span>Total Discount Given</span>
@@ -373,7 +435,7 @@ export default function SalesHistory() {
                 <span>Net Profit Margin</span>
                 <span style="color: var(--green);">₱${(
                   txn.totalAmount - 
-                  txn.items.reduce((sum: number, i: any) => sum + (i.product?.costPrice || 0) * i.quantity, 0)
+                  txn.items.reduce((sum: number, i: any) => sum + (i.costPrice ?? (i.product?.costPrice || 0)) * i.quantity, 0)
                 ).toFixed(2)}</span>
               </div>
             </div>
@@ -389,13 +451,14 @@ export default function SalesHistory() {
     };
 
     return (
-        <div className="page">
-            <div className="page-header">
+        <div className="flex flex-col h-full bg-[#f8fafc]">
+            <header className="h-[60px] bg-white border-b border-slate-200 px-6 shrink-0 flex items-center justify-between">
                 <div>
-                    <h1>Sales History</h1>
-                    <p>{transactions.length} transactions</p>
+                    <h1 className="text-[20px] font-bold text-slate-900 tracking-tight">Sales History</h1>
+                    <p className="text-[11px] text-slate-500 font-medium">{transactions.length} transactions</p>
                 </div>
-            </div>
+            </header>
+            <main className="flex-1 p-5 overflow-y-auto w-full">
 
             <div className="filters-bar">
                 <div className="search-box">
@@ -472,7 +535,7 @@ export default function SalesHistory() {
                                                 </span>
                                             ) : (
                                                 <span style={{ fontSize: '0.75rem', padding: '2px 6px', background: 'rgba(107, 203, 119, 0.15)', color: '#2b8a3e', borderRadius: '4px', border: '1px solid rgba(107, 203, 119, 0.3)', textTransform: 'uppercase', fontWeight: 'bold' }}>
-                                                    Completed
+                                                    {txn.refundStatus && txn.refundStatus !== 'NONE' ? `REFUNDED (${txn.refundStatus})` : 'Completed'}
                                                 </span>
                                             )}
                                         </td>
@@ -482,9 +545,14 @@ export default function SalesHistory() {
                                                     <Eye size={16} />
                                                 </button>
                                                 {(user?.role === 'ADMIN' || user?.role === 'STAFF') && txn.status !== 'VOIDED' && (
-                                                    <button className="btn-icon btn-delete" onClick={() => handleVoidTransaction(txn.id)} title="Void Transaction">
-                                                        <Trash2 size={16} />
-                                                    </button>
+                                                    <>
+                                                        <button className="btn-icon btn-view" style={{ color: 'var(--accent)' }} onClick={() => handleReturnTransaction(txn)} title="Process Return">
+                                                            <Undo2 size={16} />
+                                                        </button>
+                                                        <button className="btn-icon btn-delete" onClick={() => handleVoidTransaction(txn.id)} title="Void Transaction">
+                                                            <Trash2 size={16} />
+                                                        </button>
+                                                    </>
                                                 )}
                                             </div>
                                         </td>
@@ -495,6 +563,7 @@ export default function SalesHistory() {
                     </div>
                 </motion.div>
             )}
+        </main>
         </div>
     );
 }

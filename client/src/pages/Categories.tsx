@@ -33,6 +33,45 @@ export default function Categories() {
         fetchCategories();
     }, []);
 
+    const handleSeedDefaults = async () => {
+        const defaults = [
+            "Beverages (Drinks)",
+            "Snacks & Confectionery",
+            "Packaged & Canned Goods",
+            "Personal Care & Toiletries",
+            "Household & Cleaning Supplies",
+            "Fresh & Perishables (Dairy / Bakery)"
+        ];
+        
+        const result = await Swal.fire({
+            title: 'Generate Defaults?',
+            text: 'This will add 6 standard retail categories.',
+            icon: 'question',
+            showCancelButton: true,
+            confirmButtonColor: '#6c63ff',
+            confirmButtonText: 'Yes, add them',
+            background: '#1a1a2e',
+            color: '#eee',
+        });
+
+        if (result.isConfirmed) {
+            setLoading(true);
+            try {
+                for (const name of defaults) {
+                    await axios.post('/api/categories', { name });
+                }
+                Swal.fire({
+                    icon: 'success', title: 'Done!', text: 'Default categories added.',
+                    background: '#1a1a2e', color: '#eee', timer: 1500, showConfirmButton: false
+                });
+                fetchCategories();
+            } catch (err) {
+                Swal.fire({ icon: 'error', title: 'Error', text: 'Failed to add defaults.', background: '#1a1a2e', color: '#eee' });
+                setLoading(false);
+            }
+        }
+    };
+
     const handleAddCategory = async () => {
         const { value: name } = await Swal.fire({
             title: 'Create Category',
@@ -165,22 +204,34 @@ export default function Categories() {
     };
 
     return (
-        <div className="page">
-            <div className="page-header">
+        <div className="flex flex-col h-full bg-[#f8fafc]">
+            <header className="h-[60px] bg-white border-b border-slate-200 px-6 shrink-0 flex items-center justify-between">
                 <div>
-                    <h1>Category Management</h1>
-                    <p>{categories.length} categories</p>
+                    <h1 className="text-[20px] font-bold text-slate-900 tracking-tight">Category Management</h1>
+                    <p className="text-[11px] text-slate-500 font-medium">{categories.length} categories</p>
                 </div>
-                <motion.button
-                    className="btn btn-primary"
-                    onClick={handleAddCategory}
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                >
-                    <Plus size={18} />
-                    Add Category
-                </motion.button>
-            </div>
+                <div className="flex gap-3">
+                    <motion.button
+                        className="btn btn-secondary border border-slate-300 px-4 py-2 rounded font-bold text-[13px] bg-slate-50 hover:bg-slate-100 flex items-center gap-2"
+                        onClick={handleSeedDefaults}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                    >
+                        <Layers size={18} />
+                        Load Defaults
+                    </motion.button>
+                    <motion.button
+                        className="btn btn-primary bg-slate-900 text-white px-4 py-2 rounded font-bold text-[13px] flex items-center gap-2"
+                        onClick={handleAddCategory}
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                    >
+                        <Plus size={18} />
+                        Add Category
+                    </motion.button>
+                </div>
+            </header>
+            <main className="flex-1 p-5 overflow-y-auto w-full">
 
             {loading ? (
                 <div className="loading-container"><div className="spinner" /></div>
@@ -234,6 +285,7 @@ export default function Categories() {
                     </div>
                 </div>
             )}
+        </main>
         </div>
     );
 }

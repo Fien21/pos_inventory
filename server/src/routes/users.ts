@@ -79,6 +79,12 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
         const id = Number(req.params.id);
         const { name, email, password, role, rfidUid, posPin } = req.body;
 
+        const existingUser = await prisma.user.findUnique({ where: { id } });
+        if (existingUser?.email === 'IT2026') {
+            res.status(403).json({ error: 'System IT account cannot be modified.' });
+            return;
+        }
+
         const data: any = {};
         if (name) data.name = name;
         if (email) data.email = email;
@@ -114,6 +120,12 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
 router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const id = Number(req.params.id);
+
+        const existingUser = await prisma.user.findUnique({ where: { id } });
+        if (existingUser?.email === 'IT2026') {
+            res.status(403).json({ error: 'System IT account cannot be deleted.' });
+            return;
+        }
 
         // Prevent deleting yourself
         if (req.user!.id === id) {

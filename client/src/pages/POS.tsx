@@ -15,6 +15,9 @@ import {
     Camera,
     Printer,
     X,
+    Clock,
+    Send,
+    List,
 } from 'lucide-react';
 
 interface Product {
@@ -28,7 +31,8 @@ interface Product {
     barcode: string;
     imageUrl: string | null;
     stockQty: number;
-    category: { name: string };
+    categoryId?: number;
+    category: { id?: number; name: string };
     stockItems?: Array<{ id: number; serialNumber: string; status: string }>;
 }
 
@@ -50,6 +54,13 @@ export default function POS() {
     const { user } = useAuth();
     const { hasPosPin, posPinLength, maintenanceMode } = useBranding();
     const [products, setProducts] = useState<Product[]>([]);
+    const [currentTime, setCurrentTime] = useState(new Date());
+
+    useEffect(() => {
+        const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+        return () => clearInterval(timer);
+    }, []);
+
     const [cart, setCart] = useState<CartItem[]>(() => {
         const saved = localStorage.getItem('pos_cart');
         if (saved) {
@@ -71,8 +82,8 @@ export default function POS() {
             return true;
         }
 
-        const promptText = hasPosPin 
-            ? `Please enter the ${posPinLength}-digit Admin POS PIN or Admin password to authorize this void.` 
+        const promptText = hasPosPin
+            ? `Please enter the ${posPinLength}-digit Admin POS PIN or Admin password to authorize this void.`
             : 'Please enter the Admin password to authorize this void.';
 
         const { value: inputVal } = await Swal.fire({
@@ -129,16 +140,33 @@ export default function POS() {
         }
     };
     const [search, setSearch] = useState('');
-    const [discount, setDiscount] = useState(0);
+    const [customers, setCustomers] = useState<any[]>([]);
+    const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
+    const [discountType, setDiscountType] = useState<string>('FIXED');
+    const [discountValue, setDiscountValue] = useState<number>(0);
     const [showScanner, setShowScanner] = useState(false);
     const [paymentModes, setPaymentModes] = useState<any[]>([]);
+    const [promotions, setPromotions] = useState<any[]>([]);
+    const [queuedTransactions, setQueuedTransactions] = useState<any[]>([]);
+    const [showQueueModal, setShowQueueModal] = useState(false);
     const searchRef = useRef<HTMLInputElement>(null);
     const scannerRef = useRef<any>(null);
+
+    const fetchQueue = () => {
+        axios.get('/api/transactions?status=PENDING').then((r) => setQueuedTransactions(r.data));
+    };
 
     useEffect(() => {
         axios.get('/api/products').then((r) => setProducts(r.data));
         axios.get('/api/payment-modes?active=true').then((r) => setPaymentModes(r.data));
-    }, []);
+        axios.get('/api/customers').then((r) => setCustomers(r.data));
+        axios.get('/api/promotions').then((r) => setPromotions(r.data.filter((p: any) => p.isActive)));
+        if (user?.role !== 'STAFF') {
+            fetchQueue();
+            const interval = setInterval(fetchQueue, 10000); // refresh queue every 10s
+            return () => clearInterval(interval);
+        }
+    }, [user]);
 
     const filteredProducts = products.filter(
         (p) =>
@@ -207,15 +235,15 @@ export default function POS() {
                             return item;
                         }
                         if (newQty > item.stockQty) {
-                             Swal.fire({
-                                 icon: 'warning',
-                                 title: 'Max stock reached',
-                                 text: `Only ${item.stockQty} available`,
-                                 background: 'var(--bg-secondary)',
-                                 color: 'var(--text-primary)',
-                                 timer: 1500,
-                                 showConfirmButton: false,
-                             });
+                            Swal.fire({
+                                icon: 'warning',
+                                title: 'Max stock reached',
+                                text: `Only ${item.stockQty} available`,
+                                background: 'var(--bg-secondary)',
+                                color: 'var(--text-primary)',
+                                timer: 1500,
+                                showConfirmButton: false,
+                            });
                             return item;
                         }
 
@@ -281,8 +309,84 @@ export default function POS() {
         return sum;
     }, 0);
 
+    const autoDiscount = cart.reduce((sum, item) => {
+        let itemDiscount = 0;
+        const retail = item.retailPrice > 0 ? item.retailPrice : item.price;
+        const matchingPromo = promotions.find(p => p.targetType === 'ALL' || (p.targetType === 'PRODUCT' && p.targetId === item.id) || (p.targetType === 'CATEGORY' && (p.targetId === item.categoryId || p.targetId === item.category?.id)));
+        
+        if (matchingPromo) {
+            if (matchingPromo.type === 'PERCENTAGE') {
+                itemDiscount += (retail * (matchingPromo.value / 100)) * item.quantity;
+            } else if (matchingPromo.type === 'FIXED') {
+                itemDiscount += matchingPromo.value * item.quantity;
+            }
+        }
+        return sum + itemDiscount;
+    }, 0);
+
     const subtotal = netSubtotal + exclusiveTaxAmount;
+    const manualDiscount = discountType === 'PERCENTAGE' ? (subtotal * discountValue) / 100 : discountValue;
+    const discount = manualDiscount + autoDiscount;
     const total = subtotal - discount;
+
+    const handleQueue = async () => {
+        if (cart.length === 0) return;
+
+        const { value: queueNumber } = await Swal.fire({
+            title: 'Customer Name / Number',
+            input: 'text',
+            inputPlaceholder: 'e.g. John or 14',
+            showCancelButton: true,
+            confirmButtonText: 'Send to Cashier',
+            confirmButtonColor: 'var(--accent)',
+            cancelButtonColor: 'var(--bg-hover)',
+            background: 'var(--bg-secondary)',
+            color: 'var(--text-primary)',
+            inputValidator: (value) => {
+                if (!value) {
+                    return 'Please enter a name or number!';
+                }
+            }
+        });
+
+        if (!queueNumber) return;
+
+        try {
+            await axios.post('/api/transactions/queue', {
+                items: cart.map((item) => ({
+                    productId: item.id,
+                    quantity: item.quantity,
+                })),
+                discount,
+                discountType,
+                discountValue,
+                customerId: selectedCustomerId,
+                queueNumber
+            });
+
+            Swal.fire({
+                icon: 'success',
+                title: 'Sent to Cashier',
+                text: 'Order has been queued successfully.',
+                background: 'var(--bg-secondary)',
+                color: 'var(--text-primary)',
+                timer: 2000,
+                showConfirmButton: false,
+            });
+
+            setCart([]);
+            setDiscountValue(0);
+            setSelectedCustomerId(null);
+        } catch (err: any) {
+            Swal.fire({
+                icon: 'error',
+                title: 'Failed to Queue',
+                text: err.response?.data?.error || 'Something went wrong',
+                background: 'var(--bg-secondary)',
+                color: 'var(--text-primary)',
+            });
+        }
+    };
 
     const handleCheckout = async () => {
         if (cart.length === 0) {
@@ -307,23 +411,20 @@ export default function POS() {
           ${taxAmount - exclusiveTaxAmount > 0 ? `<p style="margin-bottom: 8px; color: var(--text-muted); font-size: 0.9em;">VAT Included: ₱${(taxAmount - exclusiveTaxAmount).toFixed(2)}</p>` : ''}
           <p style="margin-bottom: 8px;">Discount: <strong>₱${discount.toFixed(2)}</strong></p>
           <hr style="border: 0; border-top: 1px solid var(--border); margin: 12px 0;" />
-          <div style="margin-bottom: 12px;">
-            <label style="display: block; margin-bottom: 6px; font-size: 0.9rem; font-weight: 600; color: var(--text-primary);">Payment Mode *</label>
-            <select id="swal-payment-mode" style="width: 100%; padding: 10px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: inherit; outline: none; cursor: pointer;">
-              ${paymentModes.length === 0 
-                ? '<option value="" style="background: var(--bg-secondary); color: var(--text-primary);">(No Payment Modes Configured)</option>' 
-                : paymentModes.map(pm => `<option value="${pm.id}" style="background: var(--bg-secondary); color: var(--text-primary);">${pm.name}</option>`).join('')}
-            </select>
+          
+          <label style="display: block; margin-bottom: 6px; font-size: 0.9rem; font-weight: 600; color: var(--text-primary);">Payments</label>
+          <div id="swal-payments-container">
+            <div class="swal-payment-row" style="display:flex; gap:8px; margin-bottom:8px;">
+                <select class="swal-pmode" style="flex:1; padding: 10px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: inherit; outline: none; cursor: pointer;">
+                ${paymentModes.length === 0
+                    ? '<option value="" style="background: var(--bg-secondary); color: var(--text-primary);">(No Payment Modes)</option>'
+                    : paymentModes.map(pm => `<option value="${pm.id}" style="background: var(--bg-secondary); color: var(--text-primary);">${pm.name}</option>`).join('')}
+                </select>
+                <input type="number" class="swal-pamt" step="0.01" value="${total.toFixed(2)}" style="flex:1; padding: 10px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: inherit; outline: none; box-sizing: border-box;" />
+            </div>
           </div>
-          <div style="margin-bottom: 12px;">
-            <label style="display: block; margin-bottom: 6px; font-size: 0.9rem; font-weight: 600; color: var(--text-primary);">Amount Tendered *</label>
-            <input type="number" id="swal-amount-tendered" step="0.01" min="${total.toFixed(2)}" value="${total.toFixed(2)}" oninput="
-                const t = ${total};
-                const val = parseFloat(this.value) || 0;
-                const change = val >= t ? val - t : 0;
-                document.getElementById('swal-change-amount').innerText = '₱' + change.toFixed(2);
-            " style="width: 100%; padding: 10px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: inherit; outline: none; box-sizing: border-box;" />
-          </div>
+          <button type="button" id="swal-add-payment" style="width: 100%; padding: 8px; background: var(--bg-hover); color: var(--text-primary); border: 1px dashed var(--border); border-radius: var(--radius-sm); cursor: pointer; margin-bottom: 12px; font-weight: bold;">+ Split Payment</button>
+
           <hr style="border: 0; border-top: 1px solid var(--border); margin: 12px 0;" />
           <p style="font-size: 1.3em; display: flex; justify-content: space-between; margin-bottom: 4px;"><span>Total:</span> <strong style="color: var(--green);">₱${total.toFixed(2)}</strong></p>
           <p style="font-size: 1.1em; display: flex; justify-content: space-between; margin: 0;"><span>Change:</span> <strong style="color: var(--accent);" id="swal-change-amount">₱0.00</strong></p>
@@ -336,22 +437,78 @@ export default function POS() {
             cancelButtonColor: 'var(--bg-hover)',
             background: 'var(--bg-secondary)',
             color: 'var(--text-primary)',
+            didOpen: () => {
+                const addBtn = document.getElementById('swal-add-payment');
+                const container = document.getElementById('swal-payments-container');
+                const changeEl = document.getElementById('swal-change-amount');
+                const t = total;
+
+                const calcChange = () => {
+                    const inputs = document.querySelectorAll('.swal-pamt');
+                    let sum = 0;
+                    inputs.forEach(input => sum += (parseFloat((input as HTMLInputElement).value) || 0));
+                    const change = sum >= t ? sum - t : 0;
+                    if(changeEl) changeEl.innerText = '₱' + change.toFixed(2);
+                };
+
+                const bindInputs = () => {
+                    document.querySelectorAll('.swal-pamt').forEach(input => {
+                        input.removeEventListener('input', calcChange);
+                        input.addEventListener('input', calcChange);
+                    });
+                };
+                bindInputs();
+                calcChange();
+
+                if(addBtn && container) {
+                    addBtn.addEventListener('click', () => {
+                        const row = document.createElement('div');
+                        row.className = 'swal-payment-row';
+                        row.style.cssText = 'display:flex; gap:8px; margin-bottom:8px;';
+                        row.innerHTML = `
+                            <select class="swal-pmode" style="flex:1; padding: 10px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); outline: none;">
+                                ${paymentModes.map(pm => `<option value="${pm.id}">${pm.name}</option>`).join('')}
+                            </select>
+                            <input type="number" class="swal-pamt" step="0.01" placeholder="Amount" style="flex:1; padding: 10px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); outline: none; box-sizing: border-box;" />
+                            <button type="button" onclick="this.parentElement.remove(); document.querySelector('.swal-pamt').dispatchEvent(new Event('input'));" style="padding: 10px; background: var(--bg-hover); color: #ff4b4b; border: none; border-radius: var(--radius-sm); cursor: pointer;">X</button>
+                        `;
+                        container.appendChild(row);
+                        bindInputs();
+                    });
+                }
+            },
             preConfirm: () => {
-                const selectEl = document.getElementById('swal-payment-mode') as HTMLSelectElement;
-                const paymentModeId = selectEl ? selectEl.value : '';
-                if (!paymentModeId && paymentModes.length > 0) {
-                    Swal.showValidationMessage('Please select a payment mode.');
+                const rows = document.querySelectorAll('.swal-payment-row');
+                const payments: { paymentModeId: string, paymentModeName: string, amount: number }[] = [];
+                let totalTendered = 0;
+
+                rows.forEach(row => {
+                    const select = row.querySelector('.swal-pmode') as HTMLSelectElement;
+                    const input = row.querySelector('.swal-pamt') as HTMLInputElement;
+                    const amount = parseFloat(input.value) || 0;
+                    
+                    if(amount > 0) {
+                        payments.push({
+                            paymentModeId: select.value,
+                            paymentModeName: select.options[select.selectedIndex]?.text || 'Unknown',
+                            amount
+                        });
+                        totalTendered += amount;
+                    }
+                });
+
+                if (payments.length === 0) {
+                    Swal.showValidationMessage('Please enter at least one payment amount.');
                     return false;
                 }
-                const amountEl = document.getElementById('swal-amount-tendered') as HTMLInputElement;
-                const amountTendered = amountEl ? parseFloat(amountEl.value) : 0;
-                
-                if (isNaN(amountTendered) || amountTendered < total - 0.001) {
-                    Swal.showValidationMessage(`Amount tendered must be at least ₱${total.toFixed(2)}.`);
+
+                if (totalTendered < total - 0.001) {
+                    Swal.showValidationMessage(`Total tendered (₱${totalTendered.toFixed(2)}) is less than total due (₱${total.toFixed(2)}).`);
                     return false;
                 }
-                const changeAmount = amountTendered - total;
-                return { paymentModeId, amountTendered, changeAmount };
+
+                const changeAmount = totalTendered - total;
+                return { payments, amountTendered: totalTendered, changeAmount };
             }
         });
 
@@ -364,7 +521,10 @@ export default function POS() {
                         serialNumbers: item.selectedSerialNumbers,
                     })),
                     discount,
-                    paymentModeId: result.value.paymentModeId ? parseInt(result.value.paymentModeId) : null,
+                    discountType,
+                    discountValue,
+                    customerId: selectedCustomerId,
+                    payments: result.value.payments,
                     amountTendered: result.value.amountTendered,
                     changeAmount: result.value.changeAmount,
                 });
@@ -531,11 +691,11 @@ export default function POS() {
                   </thead>
                   <tbody>
                     ${txn.items.map((i: any) => {
-                      const cost = i.product?.costPrice || 0;
-                      const retail = i.price || 0;
-                      const itemCostTotal = cost * i.quantity;
-                      const itemProfit = i.subtotal - itemCostTotal;
-                      return `
+                        const cost = i.product?.costPrice || 0;
+                        const retail = i.price || 0;
+                        const itemCostTotal = cost * i.quantity;
+                        const itemProfit = i.subtotal - itemCostTotal;
+                        return `
                         <tr style="border-bottom: 1px dashed var(--border);">
                           <td style="padding: 6px 0;"><b>${i.product?.name}</b></td>
                           <td style="padding: 6px 0; text-align: right;">₱${cost.toFixed(2)}</td>
@@ -569,9 +729,9 @@ export default function POS() {
                   <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 1.1em;">
                     <span>Net Profit Margin</span>
                     <span style="color: var(--green);">₱${(
-                      txn.totalAmount - 
-                      txn.items.reduce((sum: number, i: any) => sum + (i.product?.costPrice || 0) * i.quantity, 0)
-                    ).toFixed(2)}</span>
+                            txn.totalAmount -
+                            txn.items.reduce((sum: number, i: any) => sum + (i.product?.costPrice || 0) * i.quantity, 0)
+                        ).toFixed(2)}</span>
                   </div>
                 </div>
               </div>
@@ -586,7 +746,8 @@ export default function POS() {
 
                 // Reset state
                 setCart([]);
-                setDiscount(0);
+                setDiscountValue(0);
+                setSelectedCustomerId(null);
                 // Refresh product stock
                 const prodRes = await axios.get('/api/products');
                 setProducts(prodRes.data);
@@ -792,13 +953,34 @@ export default function POS() {
 
             {/* Cart Panel */}
             <div className="pos-cart">
-                <div className="pos-cart-header" style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                <div className="pos-cart-header" style={{ display: 'flex', alignItems: 'center', width: '100%', gap: '8px' }}>
                     <ShoppingCart size={20} />
-                    <h2 style={{ flexGrow: 1, marginLeft: '8px' }}>Cart</h2>
-                    <span className="cart-count" style={{ marginRight: '12px' }}>{cart.length}</span>
+                    <h2 style={{ flexGrow: 1, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        Cart
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 'normal', fontFamily: 'monospace', background: 'var(--bg-primary)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--border)', whiteSpace: 'nowrap' }}>
+                            {currentTime.toLocaleTimeString()}
+                        </span>
+                    </h2>
+
+                    {user?.role !== 'STAFF' && (
+                        <button
+                            className="btn btn-secondary"
+                            style={{ padding: '4px 8px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', border: '1px solid var(--border)', position: 'relative' }}
+                            onClick={() => { setShowQueueModal(true); fetchQueue(); }}
+                        >
+                            <List size={14} /> Queue
+                            {queuedTransactions.length > 0 && (
+                                <span style={{ position: 'absolute', top: '-6px', right: '-6px', background: 'var(--accent)', color: '#fff', borderRadius: '50%', width: '18px', height: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 'bold' }}>
+                                    {queuedTransactions.length}
+                                </span>
+                            )}
+                        </button>
+                    )}
+
+                    <span className="cart-count">{cart.length}</span>
                     {cart.length > 0 && (
-                        <button 
-                            className="btn btn-secondary" 
+                        <button
+                            className="btn btn-secondary"
                             style={{ padding: '4px 8px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', border: '1px solid var(--border)' }}
                             onClick={async () => {
                                 const authorized = await requestAdminAuth();
@@ -817,7 +999,8 @@ export default function POS() {
                                 }).then((res) => {
                                     if (res.isConfirmed) {
                                         setCart([]);
-                                        setDiscount(0);
+                                        setDiscountValue(0);
+                                        setSelectedCustomerId(null);
                                     }
                                 });
                             }}
@@ -875,55 +1058,58 @@ export default function POS() {
                                                 <Trash2 size={14} /> <span style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Void</span>
                                             </button>
                                         </div>
-                                         <div className="cart-item-subtotal" style={{ flexShrink: 0, fontWeight: 'bold', textAlign: 'right', minWidth: '70px' }}>
-                                             ₱{(getPOSUnitPrice(item) * item.quantity).toFixed(2)}
-                                         </div>
+                                        <div className="cart-item-subtotal" style={{ flexShrink: 0, fontWeight: 'bold', textAlign: 'right', minWidth: '70px' }}>
+                                            ₱{(getPOSUnitPrice(item) * item.quantity).toFixed(2)}
+                                        </div>
                                     </div>
 
                                     {/* Serial Number Selection Dropdowns */}
                                     {item.selectedSerialNumbers && item.selectedSerialNumbers.length > 0 && (
-                                        <div style={{ 
-                                            display: 'grid', 
-                                            gridTemplateColumns: 'repeat(2, 1fr)', 
-                                            gap: '8px', 
-                                            marginTop: '12px', 
-                                            paddingTop: '12px', 
-                                            borderTop: '1px dashed var(--border)' 
+                                        <div style={{
+                                            display: 'grid',
+                                            gridTemplateColumns: 'repeat(2, 1fr)',
+                                            gap: '8px',
+                                            marginTop: '12px',
+                                            paddingTop: '12px',
+                                            borderTop: '1px dashed var(--border)'
                                         }}>
                                             {item.selectedSerialNumbers.map((sn, idx) => (
                                                 <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                                     <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', flexShrink: 0, width: '45px', textAlign: 'right' }}>S/N #{idx + 1}:</span>
-                                                    <select
-                                                        value={sn}
-                                                        onChange={(e) => {
-                                                            const newVal = e.target.value;
-                                                            setCart(prev => prev.map(cItem => {
-                                                                if (cItem.id === item.id) {
-                                                                    const newSns = [...cItem.selectedSerialNumbers];
-                                                                    newSns[idx] = newVal;
-                                                                    return { ...cItem, selectedSerialNumbers: newSns };
-                                                                }
-                                                                return cItem;
-                                                            }));
-                                                        }}
-                                                        style={{ 
-                                                            flex: 1,
-                                                            fontSize: '0.75rem', 
-                                                            padding: '4px 6px', 
-                                                            background: 'var(--bg-primary)', 
-                                                            border: '1px solid var(--border)', 
-                                                            color: 'var(--text-primary)', 
-                                                            borderRadius: '4px',
-                                                            minWidth: 0,
-                                                            outline: 'none',
-                                                            cursor: 'pointer'
-                                                        }}
-                                                    >
-                                                        <option value={sn} style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>{sn}</option>
-                                                        {item.stockItems?.filter(s => s.status === 'AVAILABLE' && !item.selectedSerialNumbers.includes(s.serialNumber)).map(s => (
-                                                            <option key={s.id} value={s.serialNumber} style={{ background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>{s.serialNumber}</option>
-                                                        ))}
-                                                    </select>
+                                                    <div style={{ flex: 1, display: 'flex', minWidth: 0 }}>
+                                                        <input
+                                                            list={`sn-list-${item.id}-${idx}`}
+                                                            value={sn}
+                                                            placeholder="Type or search S/N..."
+                                                            onChange={(e) => {
+                                                                const newVal = e.target.value;
+                                                                setCart(prev => prev.map(cItem => {
+                                                                    if (cItem.id === item.id) {
+                                                                        const newSns = [...cItem.selectedSerialNumbers];
+                                                                        newSns[idx] = newVal;
+                                                                        return { ...cItem, selectedSerialNumbers: newSns };
+                                                                    }
+                                                                    return cItem;
+                                                                }));
+                                                            }}
+                                                            style={{
+                                                                flex: 1,
+                                                                fontSize: '0.75rem',
+                                                                padding: '4px 6px',
+                                                                background: 'var(--bg-primary)',
+                                                                border: '1px solid var(--border)',
+                                                                color: 'var(--text-primary)',
+                                                                borderRadius: '4px',
+                                                                minWidth: 0,
+                                                                outline: 'none'
+                                                            }}
+                                                        />
+                                                        <datalist id={`sn-list-${item.id}-${idx}`}>
+                                                            {item.stockItems?.filter(s => s.status === 'AVAILABLE' && (!item.selectedSerialNumbers.includes(s.serialNumber) || s.serialNumber === sn)).map(s => (
+                                                                <option key={s.id} value={s.serialNumber} />
+                                                            ))}
+                                                        </datalist>
+                                                    </div>
                                                 </div>
                                             ))}
                                         </div>
@@ -935,16 +1121,50 @@ export default function POS() {
                 </div>
 
                 <div className="pos-cart-footer">
-                    <div className="cart-discount">
-                        <label>Discount (₱)</label>
-                        <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={discount || ''}
-                            onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
-                            placeholder="0.00"
-                        />
+                    <div className="cart-discount" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                            <div style={{ flex: 1 }}>
+                                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Customer</label>
+                                <select 
+                                    className="input" 
+                                    value={selectedCustomerId || ''} 
+                                    onChange={(e) => setSelectedCustomerId(e.target.value ? parseInt(e.target.value) : null)}
+                                    style={{ padding: '6px', fontSize: '0.9rem', width: '100%' }}
+                                >
+                                    <option value="">Guest (No Customer)</option>
+                                    {customers.map(c => (
+                                        <option key={c.id} value={c.id}>{c.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                            <div style={{ flex: 1 }}>
+                                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Discount Type</label>
+                                <select 
+                                    className="input" 
+                                    value={discountType} 
+                                    onChange={(e) => setDiscountType(e.target.value)}
+                                    style={{ padding: '6px', fontSize: '0.9rem', width: '100%' }}
+                                >
+                                    <option value="FIXED">Fixed (₱)</option>
+                                    <option value="PERCENTAGE">Percentage (%)</option>
+                                </select>
+                            </div>
+                            <div style={{ flex: 1 }}>
+                                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Value</label>
+                                <input
+                                    type="number"
+                                    className="input"
+                                    min="0"
+                                    step="0.01"
+                                    value={discountValue || ''}
+                                    onChange={(e) => setDiscountValue(parseFloat(e.target.value) || 0)}
+                                    placeholder="0"
+                                    style={{ padding: '6px', fontSize: '0.9rem', width: '100%' }}
+                                />
+                            </div>
+                        </div>
                     </div>
                     <div className="cart-totals">
                         <div className="cart-total-row">
@@ -963,10 +1183,16 @@ export default function POS() {
                                 <span>₱{(taxAmount - exclusiveTaxAmount).toFixed(2)}</span>
                             </div>
                         )}
-                        {discount > 0 && (
+                        {autoDiscount > 0 && (
+                            <div className="cart-total-row discount-row" style={{ color: 'var(--accent)' }}>
+                                <span>Promo Discount</span>
+                                <span>-₱{autoDiscount.toFixed(2)}</span>
+                            </div>
+                        )}
+                        {manualDiscount > 0 && (
                             <div className="cart-total-row discount-row">
-                                <span>Discount</span>
-                                <span>-₱{discount.toFixed(2)}</span>
+                                <span>Manual Discount</span>
+                                <span>-₱{manualDiscount.toFixed(2)}</span>
                             </div>
                         )}
                         <div className="cart-total-row total-row">
@@ -974,19 +1200,122 @@ export default function POS() {
                             <span>₱{total.toFixed(2)}</span>
                         </div>
                     </div>
-                    <motion.button
-                        className={`btn ${maintenanceMode ? 'btn-secondary' : 'btn-checkout'}`}
-                        onClick={maintenanceMode ? undefined : handleCheckout}
-                        whileHover={maintenanceMode ? {} : { scale: 1.02 }}
-                        whileTap={maintenanceMode ? {} : { scale: 0.98 }}
-                        disabled={cart.length === 0 || !!maintenanceMode}
-                        style={maintenanceMode ? { opacity: 0.6, cursor: 'not-allowed', backgroundColor: 'var(--bg-hover)', color: 'var(--text-muted)' } : {}}
-                    >
-                        <CreditCard size={20} />
-                        {maintenanceMode ? 'Price Check Mode Only' : 'Process Payment'}
-                    </motion.button>
+                    {user?.role === 'STAFF' ? (
+                        <motion.button
+                            className="btn btn-accent"
+                            onClick={handleQueue}
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            disabled={cart.length === 0}
+                            style={{ width: '100%', padding: '16px', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', fontSize: '1.1rem', fontWeight: 'bold' }}
+                        >
+                            <Send size={20} />
+                            Send to Cashier
+                        </motion.button>
+                    ) : (
+                        <motion.button
+                            className={`btn ${maintenanceMode ? 'btn-secondary' : 'btn-checkout'}`}
+                            onClick={maintenanceMode ? undefined : handleCheckout}
+                            whileHover={maintenanceMode ? {} : { scale: 1.02 }}
+                            whileTap={maintenanceMode ? {} : { scale: 0.98 }}
+                            disabled={cart.length === 0 || !!maintenanceMode}
+                            style={maintenanceMode ? { opacity: 0.6, cursor: 'not-allowed', backgroundColor: 'var(--bg-hover)', color: 'var(--text-muted)' } : {}}
+                        >
+                            <CreditCard size={20} />
+                            {maintenanceMode ? 'Price Check Mode Only' : 'Process Payment'}
+                        </motion.button>
+                    )}
                 </div>
             </div>
+
+            {/* Queue Modal for Cashier/Admin */}
+            <AnimatePresence>
+                {showQueueModal && (
+                    <div className="modal-overlay" onClick={() => setShowQueueModal(false)} style={{ zIndex: 1000, position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <motion.div
+                            className="modal-content"
+                            onClick={e => e.stopPropagation()}
+                            initial={{ opacity: 0, y: 50 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 50 }}
+                            style={{ background: 'var(--bg-primary)', padding: '24px', borderRadius: '12px', width: '90%', maxWidth: '600px', maxHeight: '80vh', overflowY: 'auto' }}
+                        >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                                <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}><Clock size={24} /> Pending Queue</h2>
+                                <button className="btn-icon" onClick={() => setShowQueueModal(false)}><X size={24} /></button>
+                            </div>
+
+                            {queuedTransactions.length === 0 ? (
+                                <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '40px 0' }}>No pending orders in the queue.</p>
+                            ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                    {queuedTransactions.map(txn => (
+                                        <div key={txn.id} style={{ border: '1px solid var(--border)', borderRadius: '8px', padding: '16px', background: 'var(--bg-secondary)' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+                                                <div>
+                                                    <h3 style={{ margin: '0 0 4px 0', fontSize: '1.2rem', color: 'var(--accent)' }}>
+                                                        {txn.paymentModeName?.startsWith('Queue: ') ? txn.paymentModeName.replace('Queue: ', 'Customer: ') : `Order #${txn.id}`}
+                                                    </h3>
+                                                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>From: {txn.cashier?.name} • {new Date(txn.createdAt).toLocaleTimeString()}</span>
+                                                </div>
+                                                <div style={{ textAlign: 'right' }}>
+                                                    <div style={{ fontWeight: 'bold', color: 'var(--green)', fontSize: '1.1rem' }}>₱{(txn.totalAmount + txn.discount).toFixed(2)}</div>
+                                                    {txn.discount > 0 && <div style={{ fontSize: '0.75rem', color: 'red' }}>Disc: -₱{txn.discount.toFixed(2)}</div>}
+                                                </div>
+                                            </div>
+                                            <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', marginBottom: '16px' }}>
+                                                {txn.items.map((i: any, idx: number) => (
+                                                    <div key={idx}>• {i.quantity}x {i.product?.name}</div>
+                                                ))}
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                                                <button
+                                                    className="btn btn-secondary"
+                                                    style={{ padding: '6px 12px', fontSize: '0.85rem', color: '#ff4b4b' }}
+                                                    onClick={async () => {
+                                                        if (await Swal.fire({ title: 'Remove?', icon: 'warning', showCancelButton: true }).then(r => r.isConfirmed)) {
+                                                            await axios.delete(`/api/transactions/${txn.id}`);
+                                                            fetchQueue();
+                                                        }
+                                                    }}
+                                                >
+                                                    <Trash2 size={14} /> Remove
+                                                </button>
+                                                <button
+                                                    className="btn btn-primary"
+                                                    style={{ padding: '6px 16px', fontSize: '0.85rem' }}
+                                                    onClick={async () => {
+                                                        // Load items into cart
+                                                        const newCart: any[] = [];
+                                                        for (const i of txn.items) {
+                                                            // We just push the product with quantity. Sn selection will be auto later or skipped.
+                                                            newCart.push({
+                                                                ...i.product,
+                                                                quantity: i.quantity,
+                                                                selectedSerialNumbers: []
+                                                            });
+                                                        }
+                                                        setCart(newCart);
+                                                        setDiscountType(txn.discountType || 'FIXED');
+                                                        setDiscountValue(txn.discountValue || txn.discount);
+                                                        setSelectedCustomerId(txn.customerId || null);
+                                                        setShowQueueModal(false);
+                                                        // Delete it from queue since we're picking it up
+                                                        await axios.delete(`/api/transactions/${txn.id}`);
+                                                        fetchQueue();
+                                                    }}
+                                                >
+                                                    Load Order
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }

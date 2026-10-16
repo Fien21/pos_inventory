@@ -1,12 +1,15 @@
 import express from "express";
 import { PrismaClient } from "@prisma/client";
-import { authenticate } from "../middleware/auth";
+import { authenticate, authorize } from "../middleware/auth";
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
+// All inventory audit routes require ADMIN role
+router.use(authenticate, authorize('ADMIN'));
+
 // Get all inventory audits
-router.get("/", authenticate, async (req, res) => {
+router.get("/", async (req, res) => {
     try {
         const audits = await prisma.inventoryAudit.findMany({
             orderBy: { createdAt: "desc" },
@@ -57,6 +60,7 @@ router.post("/", authenticate, async (req: any, res) => {
             const audit = await tx.inventoryAudit.create({
                 data: {
                     auditorId: req.user.id,
+                    branchId: req.user.branchId || null,
                     notes: notes || "",
                     items: {
                         create: auditItems

@@ -1,13 +1,13 @@
 import express from "express";
 import { PrismaClient } from "@prisma/client";
-import { authenticate, AuthRequest } from "../middleware/auth";
+import { authenticate, authorize, AuthRequest } from "../middleware/auth";
 import { logAudit } from "../utils/audit";
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Get all audit logs
-router.get("/", authenticate, async (req, res) => {
+// Get all audit logs (ADMIN only)
+router.get("/", authenticate, authorize('ADMIN'), async (req, res) => {
     try {
         const logs = await prisma.auditLog.findMany({
             orderBy: { createdAt: "desc" },

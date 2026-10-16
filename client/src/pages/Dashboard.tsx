@@ -1,459 +1,410 @@
 import { useState, useEffect } from 'react';
-import { useAuth } from '../context/AuthContext';
-import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
+import { useAuth } from '../context/AuthContext';
 import {
     Package,
     AlertTriangle,
     ShoppingCart,
-    TrendingUp,
     FolderOpen,
-    BarChart2,
+    TrendingUp,
     RefreshCw,
+    CircleDot,
+    BarChart2
 } from 'lucide-react';
 
-interface DashboardStats {
-    totalProducts: number;
-    lowStockProducts: number;
-    totalTransactions: number;
-    totalCategories: number;
-    todaySalesAmount: number;
-    todaySalesCount: number;
-    recentTransactions: any[];
-}
-
-interface ChartData {
-    salesOverTime: Array<{ date: string; amount: number; count: number }>;
-    stockByCategory: Array<{ categoryName: string; stockQty: number }>;
-}
-
-const PesoIcon = ({ size = 22 }: { size?: number }) => (
-    <span style={{ 
-        fontSize: `${size * 0.9}px`, 
-        fontWeight: 'bold', 
-        fontFamily: 'system-ui, -apple-system, sans-serif', 
-        lineHeight: 1, 
-        display: 'inline-flex', 
-        alignItems: 'center', 
-        justifyContent: 'center',
-        width: size,
-        height: size
-    }}>
-        ₱
-    </span>
+const PesoIcon = ({ className }: { className?: string }) => (
+    <span className={`font-serif font-bold ${className}`} style={{ fontSize: '1.2em', lineHeight: 1 }}>₱</span>
 );
 
 export default function Dashboard() {
     const { user } = useAuth();
-    const [stats, setStats] = useState<DashboardStats | null>(null);
-    const [chartData, setChartData] = useState<ChartData | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [chartsLoading, setChartsLoading] = useState(true);
-    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [currentTime, setCurrentTime] = useState(new Date());
+    const [dashboardStats, setDashboardStats] = useState<any>(null);
+    const [chartsStats, setChartsStats] = useState<any>(null);
+    const [lowStockProducts, setLowStockProducts] = useState<any[]>([]);
 
-    // Tooltip state for SVG charts
-    const [tooltip, setTooltip] = useState<{ x: number; y: number; title: string; content: string; show: boolean }>({
-        x: 0,
-        y: 0,
-        title: '',
-        content: '',
-        show: false,
-    });
-
-    const fetchData = async (silent = false) => {
-        if (!silent) {
-            setLoading(stats === null);
-            setChartsLoading(chartData === null);
-        }
-        setIsRefreshing(true);
+    const fetchDashboardData = async () => {
         try {
-            const statsRes = await axios.get('/api/transactions/stats/dashboard');
-            setStats(statsRes.data);
-            setLoading(false);
-
-            if (user?.role === 'ADMIN') {
-                const chartsRes = await axios.get('/api/transactions/stats/charts');
-                setChartData(chartsRes.data);
-                setChartsLoading(false);
-            }
-        } catch (err) {
-            console.error('Failed to fetch dashboard metrics:', err);
-        } finally {
-            setIsRefreshing(false);
+            const [statsRes, chartsRes, productsRes] = await Promise.all([
+                axios.get('/api/transactions/stats/dashboard'),
+                user?.role === 'ADMIN' ? axios.get('/api/transactions/stats/charts') : Promise.resolve({ data: null }),
+                axios.get('/api/products')
+            ]);
+            setDashboardStats(statsRes.data);
+            setChartsStats(chartsRes.data);
+            const lowStock = productsRes.data.filter((p: any) => p.stockQty <= 10).slice(0, 5);
+            setLowStockProducts(lowStock);
+        } catch (error) {
+            console.error('Failed to fetch dashboard data', error);
         }
     };
 
     useEffect(() => {
-        fetchData();
-
-        // Polling interval: 5 seconds for ADMIN (real-time monitor), 30 seconds for others
-        const intervalTime = user?.role === 'ADMIN' ? 5000 : 30000;
-        const interval = setInterval(() => fetchData(true), intervalTime);
-        return () => clearInterval(interval);
+        const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+        fetchDashboardData();
+        return () => clearInterval(timer);
     }, [user?.role]);
 
-    const statCards = stats
-        ? [
-            { icon: Package, label: 'Total Products', value: stats.totalProducts, color: '#6c63ff' },
-            { icon: AlertTriangle, label: 'Low Stock', value: stats.lowStockProducts, color: '#e67700' },
-            { icon: ShoppingCart, label: 'Transactions', value: stats.totalTransactions, color: '#0b7285' },
-            { icon: FolderOpen, label: 'Categories', value: stats.totalCategories, color: '#a855f7' },
-            { icon: PesoIcon, label: "Today's Sales", value: `₱${stats.todaySalesAmount.toFixed(2)}`, color: '#2b8a3e' },
-            { icon: TrendingUp, label: "Today's Orders", value: stats.todaySalesCount, color: '#343a40' },
-        ]
-        : [];
+    const formatCurrency = (val: number) => `₱${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-    const container = {
-        hidden: { opacity: 0 },
-        show: { opacity: 1, transition: { staggerChildren: 0.08 } },
-    };
-    const item = {
-        hidden: { opacity: 0, y: 20 },
-        show: { opacity: 1, y: 0 },
-    };
+    const avgBasketValue = dashboardStats && dashboardStats.todaySalesCount > 0 
+        ? dashboardStats.todaySalesAmount / dashboardStats.todaySalesCount 
+        : 0;
 
-    // Calculate Y-axes and path elements for Sales Line Chart
-    const renderSalesLineChart = () => {
-        if (!chartData || !chartData.salesOverTime || chartData.salesOverTime.length === 0) {
-            return (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
-                    No sales data available.
-                </div>
-            );
+    const stats = [
+        { label: 'Total Products', value: dashboardStats ? dashboardStats.totalProducts.toString() : '0', icon: Package, iconColor: 'text-indigo-600', iconBg: 'bg-indigo-50', badge: 'ACTIVE', badgeType: 'gray', badgeBorder: true },
+        { label: 'Low Stock Alert', value: dashboardStats ? dashboardStats.lowStockProducts.toString() : '0', icon: AlertTriangle, iconColor: 'text-amber-500', iconBg: 'bg-amber-50', badge: 'ACTION REQ', badgeType: 'yellow', badgeBorder: false },
+        { label: 'Today\'s Transactions', value: dashboardStats ? dashboardStats.todaySalesCount.toString() : '0', icon: ShoppingCart, iconColor: 'text-blue-500', iconBg: 'bg-blue-50', badge: '0%', badgeType: 'green-text', badgeBorder: false },
+        { label: 'Active Categories', value: dashboardStats ? dashboardStats.totalCategories.toString() : '0', icon: FolderOpen, iconColor: 'text-purple-600', iconBg: 'bg-purple-50', badge: 'TOTAL', badgeType: 'gray', badgeBorder: true },
+        { label: 'Today\'s Sales', value: dashboardStats ? formatCurrency(dashboardStats.todaySalesAmount) : '₱0.00', icon: PesoIcon, iconColor: 'text-emerald-500', iconBg: 'bg-emerald-50', badge: '0%', badgeType: 'green', badgeBorder: false },
+        { label: 'Avg. Basket Value', value: formatCurrency(avgBasketValue), icon: TrendingUp, iconColor: 'text-slate-500', iconBg: 'bg-slate-100', badge: 'PER ORDER', badgeType: 'gray', badgeBorder: true },
+    ];
+
+    const chartData = chartsStats?.salesOverTime?.map((s: any) => ({ date: s.date, val: s.amount, isPeak: false })) || [
+        { date: '', val: 0 }, { date: '', val: 0 }, { date: '', val: 0 }, { date: '', val: 0 }, { date: '', val: 0 }, { date: '', val: 0, isPeak: false }, { date: '', val: 0 }
+    ];
+    if (chartData.length > 0 && chartsStats?.salesOverTime) {
+        const maxIndex = chartData.reduce((bestIndex: number, current: any, i: number, arr: any[]) => current.val > arr[bestIndex].val ? i : bestIndex, 0);
+        if (chartData[maxIndex].val > 0) {
+            chartData[maxIndex].isPeak = true;
         }
+    }
 
-        const data = chartData.salesOverTime;
-        const maxVal = Math.max(...data.map(d => d.amount), 50) * 1.15;
-        
-        const svgW = 500;
+    const recentOrders = dashboardStats?.recentTransactions?.map((t: any) => ({
+        id: t.id.toString(),
+        method: t.paymentModeId === 2 ? 'GCash' : t.paymentModeId === 3 ? 'Maya / Card' : 'Cash',
+        time: new Date(t.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        amount: formatCurrency(t.totalAmount)
+    })) || [];
+
+    const lowStock = lowStockProducts.map(p => ({
+        name: p.name, stock: p.stockQty, min: 10
+    }));
+
+    const renderSalesLineChart = () => {
+        const svgW = 800;
         const svgH = 220;
-        const padLeft = 50;
-        const padRight = 20;
-        const padTop = 20;
+        const padLeft = 40;
+        const padRight = 30;
+        const padTop = 30;
         const padBottom = 30;
 
         const plotW = svgW - padLeft - padRight;
         const plotH = svgH - padTop - padBottom;
+        const maxVal = Math.max(400, ...chartData.map((d: any) => d.val)) * 1.1;
 
-        // Path generation
         let pathD = '';
-        data.forEach((pt, i) => {
-            const x = padLeft + i * (plotW / (data.length - 1 || 1));
-            const y = padTop + plotH - (pt.amount / maxVal) * plotH;
-            if (i === 0) {
-                pathD += `M ${x} ${y}`;
-            } else {
-                pathD += ` L ${x} ${y}`;
-            }
+        chartData.forEach((pt: any, i: number) => {
+            const x = padLeft + i * (plotW / (chartData.length - 1));
+            const y = padTop + plotH - (pt.val / maxVal) * plotH;
+            if (i === 0) pathD += `M ${x} ${y}`;
+            else pathD += ` L ${x} ${y}`;
         });
 
         const firstX = padLeft;
-        const lastX = padLeft + (data.length - 1) * (plotW / (data.length - 1 || 1));
+        const lastX = padLeft + (chartData.length - 1) * (plotW / (chartData.length - 1));
         const bottomY = padTop + plotH;
         const areaD = `${pathD} L ${lastX} ${bottomY} L ${firstX} ${bottomY} Z`;
 
-        // Y-axis grid values
-        const gridLevels = [0, 0.25, 0.5, 0.75, 1];
+        const gridLevels = [0, 0.5, 1];
 
         return (
-            <div className="svg-chart-container">
-                <svg className="chart-svg" viewBox={`0 0 ${svgW} ${svgH}`}>
+            <div className="w-full h-full relative">
+                <svg className="w-full h-full overflow-visible" preserveAspectRatio="none" viewBox={`0 0 ${svgW} ${svgH}`}>
                     <defs>
-                        <linearGradient id="chart-gradient" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.3"/>
-                            <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.0"/>
+                        <linearGradient id="chartGrad" x1="0%" x2="0%" y1="0%" y2="100%">
+                            <stop offset="0%" stopColor="#94a3b8" stopOpacity="0.15"></stop>
+                            <stop offset="100%" stopColor="#f8fafc" stopOpacity="0.0"></stop>
                         </linearGradient>
                     </defs>
 
-                    {/* Grid lines & Y Axis labels */}
                     {gridLevels.map((lvl, index) => {
                         const y = padTop + plotH * lvl;
                         const labelVal = maxVal * (1 - lvl);
                         return (
                             <g key={index}>
-                                <line x1={padLeft} y1={y} x2={svgW - padRight} y2={y} className="chart-grid-line" />
-                                <text x={padLeft - 8} y={y + 4} textAnchor="end" className="chart-axis-text">
-                                    ₱{labelVal >= 1000 ? `${(labelVal / 1000).toFixed(1)}k` : labelVal.toFixed(0)}
-                                </text>
+                                <line x1={padLeft} y1={y} x2={svgW - padRight} y2={y} stroke="#f1f5f9" strokeWidth="1.5" />
+                                {labelVal > 0 && (
+                                    <text x={padLeft - 10} y={y + 4} textAnchor="end" className="text-[10px] fill-slate-400 font-semibold">
+                                        {labelVal >= 1000 ? `₱${(labelVal / 1000).toFixed(1)}k` : `₱${labelVal.toFixed(0)}`}
+                                    </text>
+                                )}
+                                {labelVal === 0 && (
+                                    <text x={padLeft - 10} y={y + 4} textAnchor="end" className="text-[10px] fill-slate-400 font-semibold">
+                                        ₱0
+                                    </text>
+                                )}
                             </g>
                         );
                     })}
 
-                    {/* Area path */}
-                    <path d={areaD} className="chart-area-path" />
+                    <path d={areaD} fill="url(#chartGrad)" />
+                    <path d={pathD} fill="none" stroke="#0f172a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
 
-                    {/* Line path */}
-                    <path d={pathD} className="chart-line-path" />
-
-                    {/* X axis labels & data points */}
-                    {data.map((pt, i) => {
-                        const x = padLeft + i * (plotW / (data.length - 1 || 1));
-                        const y = padTop + plotH - (pt.amount / maxVal) * plotH;
+                    {chartData.map((pt: any, i: number) => {
+                        const x = padLeft + i * (plotW / (chartData.length - 1));
+                        const y = padTop + plotH - (pt.val / maxVal) * plotH;
                         return (
                             <g key={i}>
-                                <text x={x} y={svgH - 8} textAnchor="middle" className="chart-axis-text">
+                                <text x={x} y={svgH - 5} textAnchor="middle" className="text-[10px] font-semibold fill-slate-500">
                                     {pt.date}
                                 </text>
                                 <circle
-                                    cx={x}
-                                    cy={y}
-                                    r={5}
-                                    className="chart-point"
-                                    onMouseEnter={(e) => {
-                                        const rect = e.currentTarget.getBoundingClientRect();
-                                        const containerRect = e.currentTarget.parentElement?.parentElement?.getBoundingClientRect();
-                                        setTooltip({
-                                            show: true,
-                                            x: rect.left - (containerRect?.left || 0) + 5,
-                                            y: rect.top - (containerRect?.top || 0),
-                                            title: pt.date,
-                                            content: `Sales: ₱${pt.amount.toFixed(2)} (${pt.count} orders)`,
-                                        });
-                                    }}
-                                    onMouseLeave={() => setTooltip(prev => ({ ...prev, show: false }))}
+                                    cx={x} cy={y} r="4.5"
+                                    fill="#ffffff" stroke="#0f172a" strokeWidth="2.5"
                                 />
+                                {pt.isPeak && (
+                                    <g transform={`translate(${x}, ${y - 15})`}>
+                                        <rect x="-45" y="-20" width="90" height="20" rx="4" fill="#0f172a" />
+                                            {formatCurrency(pt.val)} (Peak)
+                                    </g>
+                                )}
                             </g>
                         );
                     })}
-
-                    <line x1={padLeft} y1={padTop} x2={padLeft} y2={padTop + plotH} className="chart-axis-line" />
-                    <line x1={padLeft} y1={padTop + plotH} x2={svgW - padRight} y2={padTop + plotH} className="chart-axis-line" />
-                </svg>
-            </div>
-        );
-    };
-
-    // Calculate columns and values for Stock Category Bar Chart
-    const renderStockBarChart = () => {
-        if (!chartData || !chartData.stockByCategory || chartData.stockByCategory.length === 0) {
-            return (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
-                    No inventory categories available.
-                </div>
-            );
-        }
-
-        const data = chartData.stockByCategory;
-        const maxVal = Math.max(...data.map(d => d.stockQty), 20) * 1.15;
-
-        const svgW = 500;
-        const svgH = 220;
-        const padLeft = 45;
-        const padRight = 20;
-        const padTop = 20;
-        const padBottom = 30;
-
-        const plotW = svgW - padLeft - padRight;
-        const plotH = svgH - padTop - padBottom;
-
-        const numBars = data.length;
-        const colW = plotW / (numBars || 1);
-        const barW = Math.min(32, colW * 0.6);
-
-        const gridLevels = [0, 0.25, 0.5, 0.75, 1];
-
-        return (
-            <div className="svg-chart-container">
-                <svg className="chart-svg" viewBox={`0 0 ${svgW} ${svgH}`}>
-                    {/* Grid lines & Y Axis labels */}
-                    {gridLevels.map((lvl, index) => {
-                        const y = padTop + plotH * lvl;
-                        const labelVal = maxVal * (1 - lvl);
-                        return (
-                            <g key={index}>
-                                <line x1={padLeft} y1={y} x2={svgW - padRight} y2={y} className="chart-grid-line" />
-                                <text x={padLeft - 8} y={y + 4} textAnchor="end" className="chart-axis-text">
-                                    {labelVal.toFixed(0)}
-                                </text>
-                            </g>
-                        );
-                    })}
-
-                    {/* Bars */}
-                    {data.map((cat, i) => {
-                        const x = padLeft + i * colW + (colW - barW) / 2;
-                        const barH = (cat.stockQty / maxVal) * plotH;
-                        const y = padTop + plotH - barH;
-                        // Truncate category name if too long
-                        const displayName = cat.categoryName.length > 8 ? `${cat.categoryName.substring(0, 6)}..` : cat.categoryName;
-                        return (
-                            <g key={i}>
-                                <rect
-                                    x={x}
-                                    y={y}
-                                    width={barW}
-                                    height={Math.max(barH, 2)} // ensure at least 2px height so it's visible
-                                    className="chart-bar"
-                                    onMouseEnter={(e) => {
-                                        const rect = e.currentTarget.getBoundingClientRect();
-                                        const containerRect = e.currentTarget.parentElement?.parentElement?.getBoundingClientRect();
-                                        setTooltip({
-                                            show: true,
-                                            x: rect.left - (containerRect?.left || 0) + barW / 2,
-                                            y: rect.top - (containerRect?.top || 0),
-                                            title: cat.categoryName,
-                                            content: `Total Stock: ${cat.stockQty} units`,
-                                        });
-                                    }}
-                                    onMouseLeave={() => setTooltip(prev => ({ ...prev, show: false }))}
-                                />
-                                <text x={x + barW / 2} y={svgH - 8} textAnchor="middle" className="chart-axis-text">
-                                    {displayName}
-                                </text>
-                            </g>
-                        );
-                    })}
-
-                    <line x1={padLeft} y1={padTop} x2={padLeft} y2={padTop + plotH} className="chart-axis-line" />
-                    <line x1={padLeft} y1={padTop + plotH} x2={svgW - padRight} y2={padTop + plotH} className="chart-axis-line" />
                 </svg>
             </div>
         );
     };
 
     return (
-        <div className="page">
-            <div className="page-header">
+        <div className="flex flex-col h-full bg-[#f8fafc]">
+            {/* Top Header */}
+            <header className="h-[60px] bg-white border-b border-slate-200 px-6 shrink-0 flex items-center justify-between">
                 <div>
-                    <h1>Dashboard</h1>
-                    <p>Welcome back, {user?.name}! Here's your overview.</p>
+                    <h1 className="text-[20px] font-bold text-slate-900 tracking-tight">Dashboard</h1>
+                    <p className="text-[11px] text-slate-500 font-medium">Welcome back, {user?.name || 'System Admin'}! Here's your overview today.</p>
                 </div>
-                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                    {user?.role === 'ADMIN' && (
-                        <div className="live-badge">
-                            <span className="live-pulse" />
-                            Live Monitoring
-                        </div>
-                    )}
-                    <button 
-                        className="btn btn-secondary" 
-                        onClick={() => fetchData()}
-                        disabled={isRefreshing}
-                        style={{ padding: '8px 12px' }}
-                        title="Refresh Data"
-                    >
-                        <RefreshCw size={16} className={isRefreshing ? 'spin' : ''} style={{ animation: isRefreshing ? 'spin 1s linear infinite' : 'none' }} />
+
+                <div className="flex items-center gap-2.5">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-700 text-[10px] font-bold tracking-wide">
+                        <CircleDot className="w-2.5 h-2.5 text-emerald-500 fill-emerald-500 animate-pulse" />
+                        LIVE MONITORING
+                    </div>
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-700 text-[10px] font-bold tracking-wide">
+                        <CircleDot className="w-2.5 h-2.5 text-emerald-500 fill-emerald-500" />
+                        System Healthy
+                    </div>
+
+                    <div className="text-[11px] font-mono font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded border border-slate-200">
+                        {currentTime.toLocaleTimeString()}
+                    </div>
+
+                    <button className="p-1 rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-50">
+                        <RefreshCw className="w-3.5 h-3.5" />
                     </button>
-                    <span className="role-badge">{user?.role}</span>
+
+                    <button className="bg-slate-900 text-white text-[11px] font-bold px-3 py-1 rounded flex items-center gap-1.5 hover:bg-slate-800 transition-colors">
+                        <span>+</span> Quick Sale
+                    </button>
+
+                    <div className="border border-slate-200 bg-white text-slate-700 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider">
+                        ADMIN
+                    </div>
                 </div>
-            </div>
+            </header>
 
-            {loading ? (
-                <div className="loading-container"><div className="spinner" /></div>
-            ) : (
-                <motion.div 
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.2 }}
-                >
-                    <motion.div className="stats-grid" variants={container} initial="hidden" animate="show">
-                        {statCards.map((card) => (
-                            <motion.div key={card.label} className="stat-card" variants={item} whileHover={{ y: -4 }}>
-                                <div className="stat-icon" style={{ background: `${card.color}15`, color: card.color }}>
-                                    <card.icon size={22} />
-                                </div>
-                                <div className="stat-info">
-                                    <span className="stat-value">{card.value}</span>
-                                    <span className="stat-label">{card.label}</span>
-                                </div>
-                            </motion.div>
-                        ))}
-                    </motion.div>
+            {/* Main Content */}
+            <main className="flex-1 p-5 overflow-y-auto space-y-4">
 
-                    {/* Chart section (ADMIN only) */}
-                    {user?.role === 'ADMIN' && (
-                        <div className="charts-grid">
-                            <div className="chart-card">
-                                <div className="chart-header">
-                                    <h3 className="chart-title">
-                                        <TrendingUp size={18} style={{ color: 'var(--accent)' }} />
-                                        Weekly Sales Volume
-                                    </h3>
+                {/* Stats Row */}
+                <div className="grid grid-cols-6 gap-3">
+                    {stats.map((stat, i) => (
+                        <div key={i} className="bg-white border border-slate-200 rounded-lg p-3 flex flex-col justify-between shadow-sm">
+                            <div className="flex items-start justify-between mb-2">
+                                <div className={`w-8 h-8 rounded ${stat.iconBg} ${stat.iconColor} flex items-center justify-center`}>
+                                    <stat.icon className="w-4 h-4" />
                                 </div>
-                                {chartsLoading ? (
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '220px' }}>
-                                        <div className="spinner" />
-                                    </div>
-                                ) : (
-                                    renderSalesLineChart()
-                                )}
+                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${stat.badgeType === 'gray' ? 'bg-slate-100 text-slate-500' :
+                                        stat.badgeType === 'yellow' ? 'bg-amber-100 text-amber-700' :
+                                            stat.badgeType === 'green-text' ? 'text-emerald-500 bg-transparent' :
+                                                'bg-emerald-100 text-emerald-700'
+                                    } ${stat.badgeBorder ? 'border border-slate-200 bg-white text-slate-400' : ''}`}>
+                                    {stat.badge}
+                                </span>
                             </div>
-
-                            <div className="chart-card">
-                                <div className="chart-header">
-                                    <h3 className="chart-title">
-                                        <BarChart2 size={18} style={{ color: 'var(--accent)' }} />
-                                        Stock Level by Category
-                                    </h3>
-                                </div>
-                                {chartsLoading ? (
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '220px' }}>
-                                        <div className="spinner" />
-                                    </div>
-                                ) : (
-                                    renderStockBarChart()
-                                )}
+                            <div>
+                                <h3 className="text-xl font-bold text-slate-900">{stat.value}</h3>
+                                <p className="text-[10px] text-slate-500 font-medium">{stat.label}</p>
                             </div>
                         </div>
-                    )}
+                    ))}
+                </div>
 
-                    {/* Recent Transactions Table */}
-                    {stats && stats.recentTransactions.length > 0 && (
-                        <motion.div
-                            className="card"
-                            style={{ marginTop: '24px' }}
-                            initial={{ opacity: 0, y: 15 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.1 }}
-                        >
-                            <h2 className="card-title">Recent Transactions</h2>
-                            <div className="table-container">
-                                <table>
-                                    <thead>
-                                        <tr>
-                                            <th>ID</th>
-                                            <th>Cashier</th>
-                                            <th>Items</th>
-                                            <th>Total</th>
-                                            <th>Date</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {stats.recentTransactions.map((txn: any) => (
-                                            <tr key={txn.id}>
-                                                <td><strong>#{txn.id}</strong></td>
-                                                <td>{txn.cashier.name}</td>
-                                                <td>{txn._count.items} items</td>
-                                                <td className="text-green" style={{ fontWeight: '700' }}>
-                                                    ₱{txn.totalAmount.toFixed(2)}
-                                                </td>
-                                                <td>{new Date(txn.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                {/* Charts Row */}
+                <div className="flex gap-4">
+                    {/* Line Chart */}
+                    <div className="flex-[2] bg-white border border-slate-200 rounded-lg p-4 shadow-sm flex flex-col">
+                        <div className="flex justify-between items-start mb-2">
+                            <div className="flex gap-2">
+                                <div className="p-1 rounded bg-slate-100 text-slate-600 self-start">
+                                    <TrendingUp className="w-3.5 h-3.5" />
+                                </div>
+                                <div>
+                                    <h2 className="text-[13px] font-bold text-slate-900 leading-tight">Weekly Sales Volume</h2>
+                                    <p className="text-[10px] text-slate-500">Last 7 Days</p>
+                                </div>
                             </div>
-                        </motion.div>
-                    )}
+                            <div className="text-right">
+                                <div className="text-[16px] font-bold text-slate-900 leading-tight">
+                                    {formatCurrency(chartsStats?.salesOverTime?.reduce((sum: number, s: any) => sum + s.amount, 0) || 0)}
+                                </div>
+                            </div>
+                        </div>
 
-                    {/* SVG Chart Tooltip */}
-                    <AnimatePresence>
-                        {tooltip.show && (
-                            <motion.div
-                                className="chart-tooltip"
-                                style={{ left: tooltip.x, top: tooltip.y }}
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                exit={{ opacity: 0 }}
-                                transition={{ duration: 0.1 }}
-                            >
-                                <span className="chart-tooltip-date">{tooltip.title}</span>
-                                <span className="chart-tooltip-val">{tooltip.content}</span>
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-                </motion.div>
-            )}
+                        <div className="flex-1 min-h-[220px]">
+                            {renderSalesLineChart()}
+                        </div>
+
+                        <div className="flex justify-between items-center mt-2 text-[10px] font-medium text-slate-500 border-t border-slate-100 pt-3">
+                            <div>Highest conversion: <span className="font-bold text-slate-700">{chartData.find((d: any) => d.isPeak)?.date || '-'}</span></div>
+                            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-slate-900"></div> Total 7 Day Net Revenue</div>
+                        </div>
+                    </div>
+
+                    {/* Bars Chart */}
+                    <div className="flex-[1] bg-white border border-slate-200 rounded-lg p-4 shadow-sm flex flex-col">
+                        <div className="flex justify-between items-start mb-6">
+                            <div className="flex gap-2">
+                                <div className="p-1 rounded bg-slate-100 text-slate-600 self-start">
+                                    <BarChart2 className="w-3.5 h-3.5" />
+                                </div>
+                                <div>
+                                    <h2 className="text-[13px] font-bold text-slate-900 leading-tight">Stock Level by Category</h2>
+                                    <p className="text-[10px] text-slate-500">Inventory volume distribution</p>
+                                </div>
+                            </div>
+                            <button className="text-[10px] font-medium text-slate-500 hover:text-slate-900">Manage {'>'}</button>
+                        </div>
+
+                        <div className="flex-1 space-y-4">
+                            {chartsStats?.stockByCategory?.slice(0, 4).map((cat: any, i: number) => {
+                                const colors = ['bg-slate-900', 'bg-blue-600', 'bg-emerald-500', 'bg-amber-500'];
+                                const totalStock = chartsStats.stockByCategory.reduce((sum: number, c: any) => sum + c.stockQty, 0);
+                                const pct = totalStock > 0 ? (cat.stockQty / totalStock * 100).toFixed(0) + '%' : '0%';
+                                return (
+                                    <div key={i} className="space-y-1.5">
+                                        <div className="flex justify-between text-[11px] font-bold text-slate-800">
+                                            <div className="flex items-center gap-1.5">
+                                                <div className={`w-2 h-2 rounded-full ${colors[i % colors.length]}`}></div>
+                                                {cat.categoryName}
+                                            </div>
+                                            <div className="flex gap-2 text-[10px]">
+                                                <span className={cat.stockQty <= 10 ? "text-amber-500" : "text-slate-400 font-medium"}>{cat.stockQty} units</span>
+                                                <span>{pct}</span>
+                                            </div>
+                                        </div>
+                                        <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                                            <div className={`h-full ${colors[i % colors.length]} rounded-full`} style={{ width: pct }}></div>
+                                        </div>
+                                    </div>
+                                );
+                            }) || (
+                                <div className="text-slate-400 text-xs text-center mt-8">No category data available</div>
+                            )}
+                        </div>
+
+                        <div className="flex justify-between items-center mt-6 text-[10px] font-medium border-t border-slate-100 pt-3">
+                            <div className="text-slate-600">Total Stock in Warehouse: <span className="font-bold text-slate-900">{dashboardStats?.totalProducts || 0} Units</span></div>
+                            <div className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded font-bold border border-emerald-100">Optimal Level</div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Bottom Row */}
+                <div className="flex gap-4 pb-4">
+                    {/* Orders Table */}
+                    <div className="flex-[2] bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+                        <div className="flex justify-between items-center mb-4">
+                            <div>
+                                <h2 className="text-[13px] font-bold text-slate-900">Recent POS Orders</h2>
+                                <p className="text-[10px] text-slate-500">Live feed directly connected to Register 01</p>
+                            </div>
+                            <button className="text-[10px] font-bold text-slate-600 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded hover:bg-slate-100 transition-colors">
+                                View All Orders
+                            </button>
+                        </div>
+
+                        <table className="w-full text-[11px] text-left border-separate border-spacing-y-2">
+                            <thead>
+                                <tr className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                                    <th className="font-medium pb-2 border-b border-slate-100 w-1/5">ORDER REF</th>
+                                    <th className="font-medium pb-2 border-b border-slate-100 w-1/5">PAYMENT METHOD</th>
+                                    <th className="font-medium pb-2 border-b border-slate-100 w-1/5">TIME</th>
+                                    <th className="font-medium pb-2 border-b border-slate-100 w-1/5 text-right pr-4">AMOUNT</th>
+                                    <th className="font-medium pb-2 border-b border-slate-100 w-1/5">STATUS</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {recentOrders.map((order: any, i: number) => (
+                                    <tr key={i} className="">
+                                        <td className="py-2 border-b border-slate-50">
+                                            <span className="inline-flex items-center gap-1.5 font-bold text-slate-900">
+                                                <span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded text-[9px] border border-emerald-100">-</span>
+                                                Order {order.id}
+                                            </span>
+                                        </td>
+                                        <td className="py-2 border-b border-slate-50 font-medium text-slate-600">
+                                            {order.method === 'GCash' ? <span className="text-blue-500">GCash</span> : order.method === 'Maya / Card' ? <span className="text-purple-600">Maya / Card</span> : 'Cash'}
+                                        </td>
+                                        <td className="py-2 border-b border-slate-50 text-slate-400 font-medium">{order.time}</td>
+                                        <td className="py-2 border-b border-slate-50 text-right pr-4 font-bold text-slate-900">{order.amount}</td>
+                                        <td className="py-2 border-b border-slate-50">
+                                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-600 text-[9px] font-bold">
+                                                <CircleDot className="w-2 h-2 text-emerald-500 fill-emerald-500" /> Completed
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ))}
+                                {recentOrders.length === 0 && (
+                                    <tr>
+                                        <td colSpan={5} className="py-4 text-center text-slate-400">No recent orders found</td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+
+                        <div className="flex justify-between items-center mt-3 text-[10px] text-slate-400 font-medium pt-2">
+                            <div>Showing last {recentOrders.length} live orders</div>
+                            <div>Sync status: Real-time socket online</div>
+                        </div>
+                    </div>
+
+                    {/* Low Stock SKUs */}
+                    <div className="flex-[1] bg-white border border-slate-200 rounded-lg p-4 shadow-sm flex flex-col">
+                        <div className="flex justify-between items-start mb-4">
+                            <div>
+                                <h2 className="text-[13px] font-bold text-slate-900">Low Stock SKUs</h2>
+                                <p className="text-[10px] text-slate-500">Critical reorder thresholds</p>
+                            </div>
+                            <span className="bg-amber-100 text-amber-700 text-[9px] font-bold px-2 py-0.5 rounded">{dashboardStats?.lowStockProducts || 0} Needs Attention</span>
+                        </div>
+
+                        <div className="flex-1 space-y-3">
+                            {lowStock.map((item, i) => (
+                                <div key={i} className="flex justify-between items-center py-2 border-b border-slate-50 last:border-0">
+                                    <div>
+                                        <div className="text-[11px] font-bold text-slate-900">{item.name}</div>
+                                        <div className="text-[10px] text-slate-500 mt-0.5">
+                                            Stock: <span className={item.stock <= 2 ? "text-red-500 font-bold" : "text-amber-500 font-bold"}>{item.stock} units</span> • Min: {item.min}
+                                        </div>
+                                    </div>
+                                    <button className="border border-slate-200 bg-white text-slate-600 text-[10px] font-bold px-2 py-1 rounded hover:bg-slate-50 transition-colors">
+                                        + Restock
+                                    </button>
+                                </div>
+                            ))}
+                            {lowStock.length === 0 && (
+                                <div className="text-slate-400 text-xs text-center mt-4">No low stock items</div>
+                            )}
+                        </div>
+
+                        <button className="w-full mt-4 bg-slate-900 text-white text-[11px] font-bold py-2.5 rounded hover:bg-slate-800 transition-colors">
+                            Generate Reorder Purchase Orders
+                        </button>
+                    </div>
+                </div>
+            </main>
         </div>
     );
 }

@@ -459,7 +459,9 @@ export default function Inventory() {
     };
 
     useEffect(() => {
-        axios.get('/api/categories').then((r) => setCategories(r.data));
+        axios.get('/api/categories')
+            .then((r) => setCategories(r.data))
+            .catch((err) => console.error("Failed to fetch categories:", err));
     }, []);
 
     useEffect(() => {
@@ -786,13 +788,13 @@ export default function Inventory() {
     };
 
     return (
-        <div className="page">
-            <div className="page-header">
+        <div className="flex flex-col h-full bg-[#f8fafc]">
+            <header className="h-[60px] bg-white border-b border-slate-200 px-6 shrink-0 flex items-center justify-between">
                 <div>
-                    <h1>Inventory</h1>
-                    <p>{products.length} products total</p>
+                    <h1 className="text-[20px] font-bold text-slate-900 tracking-tight">Inventory</h1>
+                    <p className="text-[11px] text-slate-500 font-medium">{products.length} products total</p>
                 </div>
-                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <div className="flex items-center gap-2">
                     <input
                         type="file"
                         ref={fileInputRef}
@@ -801,34 +803,45 @@ export default function Inventory() {
                         style={{ display: 'none' }}
                     />
                     <motion.button
-                        className="btn btn-secondary"
+                        className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-3 py-1.5 rounded flex items-center gap-2 text-[12px] font-bold transition-colors"
                         onClick={() => fileInputRef.current?.click()}
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.95 }}
                     >
-                        <Upload size={18} />
+                        <Upload size={14} />
                         Import Excel
                     </motion.button>
                     <motion.button
-                        className="btn btn-secondary"
+                        className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-3 py-1.5 rounded flex items-center gap-2 text-[12px] font-bold transition-colors"
                         onClick={handleExportExcel}
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.95 }}
                     >
-                        <Download size={18} />
+                        <Download size={14} />
                         Export Excel
                     </motion.button>
                     <motion.button
-                        className="btn btn-primary"
+                        className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-3 py-1.5 rounded flex items-center gap-2 text-[12px] font-bold transition-colors"
+                        onClick={() => navigate('/inventory/purchase')}
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                    >
+                        <Package size={14} />
+                        Stock Purchase
+                    </motion.button>
+                    <motion.button
+                        className="bg-slate-900 text-white hover:bg-slate-800 px-3 py-1.5 rounded flex items-center gap-2 text-[12px] font-bold transition-colors"
                         onClick={() => navigate('/products/new')}
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.95 }}
                     >
-                        <Plus size={18} />
+                        <Plus size={14} />
                         Add Product
                     </motion.button>
                 </div>
-            </div>
+            </header>
+            
+            <main className="flex-1 p-5 overflow-y-auto w-full">
 
             <div className="filters-bar">
                 <div className="search-box">
@@ -1138,6 +1151,7 @@ export default function Inventory() {
                     </div>
                 )}
             </AnimatePresence>
+            </main>
         </div>
     );
 }
